@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.telephony.CellIdentityLte
 import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
@@ -16,23 +15,23 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.window.Dialog
 import androidx.core.app.ActivityCompat
-import kotlinx.coroutines.delay
 import io.github.bubbajuice.cellinfo.ui.theme.MyApplicationTheme
+import kotlinx.coroutines.delay
 import kotlin.math.round
 
 class MainActivity : ComponentActivity() {
@@ -123,10 +122,10 @@ fun PermissionDeniedDialog(onDismiss: () -> Unit) {
     }
 }
 
-
 @Composable
 fun CellInfoScreen(context: Context, modifier: Modifier = Modifier) {
     var cellInfoList by remember { mutableStateOf<List<CellInfo>>(emptyList()) }
+    val expandedCells = remember { mutableStateOf<Map<Any, Boolean>>(emptyMap()) }
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -138,7 +137,6 @@ fun CellInfoScreen(context: Context, modifier: Modifier = Modifier) {
             ) {
                 cellInfoList = telephonyManager.allCellInfo
                     .sortedByDescending {
-                        // Prioritize NR (5G) over LTE
                         when (it) {
                             is CellInfoNr -> 1
                             is CellInfoLte -> 0
@@ -150,23 +148,123 @@ fun CellInfoScreen(context: Context, modifier: Modifier = Modifier) {
         }
     }
 
-    CellInfoList(cellInfoList, modifier)
+    CellInfoList(cellInfoList, expandedCells.value, onCellExpandChange = { cellId, isExpanded ->
+        expandedCells.value = expandedCells.value.toMutableMap().apply {
+            this[cellId] = isExpanded
+        }
+    }, modifier = modifier)
 }
 
+@Composable
+fun CellInfoList(
+    cellInfoList: List<CellInfo>,
+    expandedCells: Map<Any, Boolean>,
+    onCellExpandChange: (Any, Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val groupedCells = cellInfoList.groupBy {
+        when (it) {
+            is CellInfoNr -> "5G"
+            is CellInfoLte -> "LTE"
+            else -> "Other"
+        }
+    }
+
+    LazyColumn(modifier = modifier.padding(16.dp)) {
+        groupedCells.forEach { (type, cells) ->
+            item {
+                Text(
+                    text = type,
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
+
+            val firstCell = cells.firstOrNull()
+            if (firstCell != null) {
+                item {
+                    val cellId = getCellId(firstCell)
+                    Column {
+                        CellInfoItem(
+                            cellInfo = firstCell,
+                            isExpanded = expandedCells[cellId] ?: false,
+                            onExpandChange = { isExpanded -> onCellExpandChange(cellId, isExpanded) }
+                        )
+
+                        if (cells.size > 1) {
+                            val groupExpanded = expandedCells[type] ?: false
+                            ExpandableSection(
+                                expandedTitle = "Hide ${cells.size - 1} ${type} cells",
+                                collapsedTitle = "Show ${cells.size - 1} more ${type} cells",
+                                expanded = groupExpanded,
+                                onExpandChange = { isExpanded -> onCellExpandChange(type, isExpanded) }
+                            ) {
+                                cells.drop(1).forEach { cellInfo ->
+                                    val additionalCellId = getCellId(cellInfo)
+                                    CellInfoItem(
+                                        cellInfo = cellInfo,
+                                        isExpanded = expandedCells[additionalCellId] ?: false,
+                                        onExpandChange = { isExpanded ->
+                                            onCellExpandChange(additionalCellId, isExpanded)
+                                        }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 @Composable
-fun CellInfoList(cellInfoList: List<CellInfo>, modifier: Modifier = Modifier) {
-    LazyColumn(modifier = modifier.padding(16.dp)) {
-        items(cellInfoList) { cellInfo ->
-            CellInfoItem(cellInfo)
+fun ExpandableSection(
+    expandedTitle: String,
+    collapsedTitle: String,
+    expanded: Boolean,
+    onExpandChange: (Boolean) -> Unit,
+    content: @Composable () -> Unit
+) {
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { onExpandChange(!expanded) }
+                .padding(vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = if (expanded) Icons.Default.KeyboardArrowDown else Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = if (expanded) "Collapse" else "Expand"
+            )
+            Text(
+                text = if (expanded) expandedTitle else collapsedTitle,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(start = 8.dp)
+            )
         }
+        if (expanded) {
+            content()
+        }
+    }
+}
+
+fun getCellId(cellInfo: CellInfo): Any {
+    return when (cellInfo) {
+        is CellInfoNr -> cellInfo.toString()
+        is CellInfoLte -> cellInfo.cellIdentity.ci
+        else -> cellInfo.hashCode()
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun CellInfoItem(cellInfo: CellInfo) {
-    var isExpanded by remember { mutableStateOf(false) }
+fun CellInfoItem(
+    cellInfo: CellInfo,
+    isExpanded: Boolean,
+    onExpandChange: (Boolean) -> Unit
+) {
     var showDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val cellInfoRows = if (isExpanded) {
@@ -177,6 +275,7 @@ fun CellInfoItem(cellInfo: CellInfo) {
         }
     } else {
         when (cellInfo) {
+            // 5G
             is CellInfoNr -> {
                 val cellIdentity = cellInfo.cellIdentity as CellIdentityNr
                 val cellSignalStrength = cellInfo.cellSignalStrength
@@ -188,15 +287,19 @@ fun CellInfoItem(cellInfo: CellInfo) {
                     "Band Number" to "n$band"
                 )
             }
+            // 4G
             is CellInfoLte -> {
                 val cellIdentity = cellInfo.cellIdentity
                 val cellSignalStrength = cellInfo.cellSignalStrength
+
                 val band = getLTEBandFromEArfcn(cellIdentity.earfcn)
+                val cellSectorId = calculateCellSectorId(formatCellID(cellIdentity.ci))
                 listOf(
                     "eNB ID" to calculateENBId(formatCellID(cellIdentity.ci)),
                     "Band Number" to band.toString(),
+                    "Cell Sector ID" to cellSectorId,
                     "RSRP" to cellSignalStrength.rsrp.toString() + " dBm",
-                    "RSRQ" to cellSignalStrength.rsrq.toString()
+                    "RSRQ" to cellSignalStrength.rsrq.toString() + " dB"
                 )
             }
             else -> emptyList()
@@ -207,7 +310,7 @@ fun CellInfoItem(cellInfo: CellInfo) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 8.dp)
-            .clickable { isExpanded = !isExpanded },
+            .clickable { onExpandChange(!isExpanded) },
         elevation = CardDefaults.cardElevation(8.dp)
     ) {
         Column(
@@ -219,7 +322,7 @@ fun CellInfoItem(cellInfo: CellInfo) {
                 TableRow(
                     label = label,
                     value = value,
-                    onClick = { isExpanded = !isExpanded },
+                    onClick = { onExpandChange(!isExpanded) },
                     onLongClick = { showDialog = label to getExplanation(label) }
                 )
             }
@@ -313,10 +416,10 @@ fun formatCellInfoNr(cellInfoNr: CellInfoNr): List<Pair<String, String>> {
     val band = getNrBandFromArfcn(cellIdentity.nrarfcn)
 
     return listOf(
-        "Data" to cellSignalStrength.toString() + cellIdentity.toString(),
         "ssRSRP" to cellSignalStrength.dbm.toString() + " dBm",
         "ARFCN" to cellIdentity.nrarfcn.toString(),
-        "Band" to "n$band"
+        "Band" to "n$band",
+        "Data" to cellSignalStrength.toString() + cellIdentity.toString()
     )
 }
 
@@ -417,7 +520,6 @@ fun formatCellInfoLte(cellInfoLte: CellInfoLte): List<Pair<String, String>> {
     val band = getLTEBandFromEArfcn(cellIdentity.earfcn)
 
     return listOf(
-        "Data" to cellSignalStrength.toString() + cellIdentity.toString(),
         "eNB ID" to eNodeBId,
         "Cell Sector ID" to cellSectorId,
         "Band Number" to band.toString(),
@@ -435,7 +537,8 @@ fun formatCellInfoLte(cellInfoLte: CellInfoLte): List<Pair<String, String>> {
         "RSSNR" to "$rssnr dB",
         "CQI" to "$cqi dB",
         "Operator" to (cellIdentity.operatorAlphaLong?.toString() ?: ""),
-        "Operator Abbreviation" to (cellIdentity.operatorAlphaShort?.toString() ?: "")
+        "Operator Abbreviation" to (cellIdentity.operatorAlphaShort?.toString() ?: ""),
+        "Data" to cellSignalStrength.toString() + cellIdentity.toString(),
     )
 }
 
