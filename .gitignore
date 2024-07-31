@@ -13,3 +13,6 @@
 .externalNativeBuild
 .cxx
 local.properties
+my-release-key.keystore
+my-release-key.keystore.base64
+.vscode/settings.json
