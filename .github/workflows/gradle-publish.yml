@@ -55,3 +55,27 @@ jobs:
       with:
         name: app-release.apk
         path: app/build/outputs/apk/release/app-release.apk
+
+    - name: Get version from gradle
+      id: gradle_version
+      run: |
+        VERSION=$(./gradlew -q printVersionName)
+        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+
+    - name: Create Package Version
+      id: create_version
+      run: |
+        response=$(curl -X POST \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          https://api.github.com/orgs/${{ github.repository_owner }}/packages/generic/cellinfo/${{ steps.gradle_version.outputs.VERSION }})
+        echo "UPLOAD_URL=$(echo $response | jq -r '.url')" >> $GITHUB_OUTPUT
+
+    - name: Upload APK to Package
+      run: |
+        curl -X PUT \
+          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          -H "Accept: application/vnd.github.v3+json" \
+          -H "Content-Type: application/octet-stream" \
+          --data-binary @app/build/outputs/apk/release/app-release.apk \
+          "${{ steps.create_version.outputs.UPLOAD_URL }}/cellinfo-${{ steps.gradle_version.outputs.VERSION }}.apk"    
