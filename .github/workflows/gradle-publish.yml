@@ -56,62 +56,23 @@ jobs:
         name: app-release.apk
         path: app/build/outputs/apk/release/app-release.apk
 
-    - name: Get version from gradle
-      id: gradle_version
-      run: |
-        VERSION=$(./gradlew -q printVersionName)
-        echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ github.run_number }}
+        release_name: Release ${{ github.run_number }}
+        draft: false
+        prerelease: false
 
-    - name: Create Package Version
-      id: create_version
-      run: |
-        VERSION=${{ steps.gradle_version.outputs.VERSION }}
-        PACKAGE_NAME=cellinfo
-        OWNER=${{ github.repository_owner }}
-        
-        # Determine if it's a user or organization
-        account_type=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          https://api.github.com/users/$OWNER | jq -r '.type')
-        
-        if [ "$account_type" = "Organization" ]; then
-          BASE_URL="https://api.github.com/orgs/$OWNER"
-        else
-          BASE_URL="https://api.github.com/users/$OWNER"
-        fi
-        
-        echo "Using base URL: $BASE_URL"
-        
-        # Try to create the package version
-        response=$(curl -X POST \
-          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          "$BASE_URL/packages/generic/$PACKAGE_NAME/$VERSION")
-        
-        echo "API Response: $response"
-        
-        # Check if the package already exists
-        if echo "$response" | grep -q "already exists"; then
-          echo "Package version already exists. Attempting to get the URL..."
-          response=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            "$BASE_URL/packages/generic/$PACKAGE_NAME/versions")
-          upload_url=$(echo "$response" | jq -r '.[] | select(.name=="'$VERSION'") | .url')
-        else
-          upload_url=$(echo "$response" | jq -r '.url')
-        fi
-        
-        if [ "$upload_url" = "null" ] || [ -z "$upload_url" ]; then
-          echo "Error: Failed to get upload URL. API response:"
-          echo "$response"
-          exit 1
-        fi
-        
-        echo "UPLOAD_URL=$upload_url" >> $GITHUB_OUTPUT
-        
-    - name: Upload APK to Package
-      run: |
-        curl -X PUT \
-          -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          -H "Accept: application/vnd.github.v3+json" \
-          -H "Content-Type: application/octet-stream" \
-          --data-binary @app/build/outputs/apk/release/app-release.apk \
-          "${{ steps.create_version.outputs.UPLOAD_URL }}/cellinfo-${{ steps.gradle_version.outputs.VERSION }}.apk"    
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./app/build/outputs/apk/release/app-release.apk
+        asset_name: app-release.apk
+        asset_content_type: application/vnd.android.package-archive
