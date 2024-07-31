@@ -65,19 +65,48 @@ jobs:
     - name: Create Package Version
       id: create_version
       run: |
+        VERSION=${{ steps.gradle_version.outputs.VERSION }}
+        PACKAGE_NAME=cellinfo
+        OWNER=${{ github.repository_owner }}
+        
+        # Determine if it's a user or organization
+        account_type=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          https://api.github.com/users/$OWNER | jq -r '.type')
+        
+        if [ "$account_type" = "Organization" ]; then
+          BASE_URL="https://api.github.com/orgs/$OWNER"
+        else
+          BASE_URL="https://api.github.com/users/$OWNER"
+        fi
+        
+        echo "Using base URL: $BASE_URL"
+        
+        # Try to create the package version
         response=$(curl -X POST \
           -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
-          https://api.github.com/users/${{ github.repository_owner }}/packages/generic/cellinfo/${{ steps.gradle_version.outputs.VERSION }})
+          "$BASE_URL/packages/generic/$PACKAGE_NAME/$VERSION")
+        
         echo "API Response: $response"
-        upload_url=$(echo $response | jq -r '.url')
+        
+        # Check if the package already exists
+        if echo "$response" | grep -q "already exists"; then
+          echo "Package version already exists. Attempting to get the URL..."
+          response=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "$BASE_URL/packages/generic/$PACKAGE_NAME/versions")
+          upload_url=$(echo "$response" | jq -r '.[] | select(.name=="'$VERSION'") | .url')
+        else
+          upload_url=$(echo "$response" | jq -r '.url')
+        fi
+        
         if [ "$upload_url" = "null" ] || [ -z "$upload_url" ]; then
           echo "Error: Failed to get upload URL. API response:"
           echo "$response"
           exit 1
         fi
+        
         echo "UPLOAD_URL=$upload_url" >> $GITHUB_OUTPUT
-
+        
     - name: Upload APK to Package
       run: |
         curl -X PUT \
