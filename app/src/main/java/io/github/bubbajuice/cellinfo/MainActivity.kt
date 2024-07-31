@@ -32,6 +32,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -92,6 +93,19 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             Json.decodeFromString(json)
         } else {
             getDefaultComponentList(key)
+        }
+    }
+
+    fun resetToDefault(type: String) {
+        viewModelScope.launch {
+            val defaultComponents = getDefaultComponentList(type)
+            when (type) {
+                "NR" -> _nrComponents.value = defaultComponents
+                "LTE" -> _lteComponents.value = defaultComponents
+                "NR_Compressed" -> _nrCompressedComponents.value = defaultComponents
+                "LTE_Compressed" -> _lteCompressedComponents.value = defaultComponents
+            }
+            saveComponentList(type, defaultComponents)
         }
     }
 
@@ -228,27 +242,69 @@ fun SettingsScreen(
             }
         }
 
-        when (selectedTab) {
-            0 -> ComponentList(
-                components = viewModel.nrCompressedComponents.collectAsState().value,
-                onOrderChanged = { from, to -> viewModel.updateComponentOrder("NR_Compressed", from, to) },
-                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("NR_Compressed", id) }
+        Box(modifier = Modifier.weight(1f)) {
+            when (selectedTab) {
+                0 -> ComponentListWithReset(
+                    components = viewModel.nrCompressedComponents.collectAsState().value,
+                    onOrderChanged = { from, to -> viewModel.updateComponentOrder("NR_Compressed", from, to) },
+                    onToggleEnabled = { id -> viewModel.toggleComponentEnabled("NR_Compressed", id) },
+                    onResetToDefault = { viewModel.resetToDefault("NR_Compressed") }
+                )
+                1 -> ComponentListWithReset(
+                    components = viewModel.nrComponents.collectAsState().value,
+                    onOrderChanged = { from, to -> viewModel.updateComponentOrder("NR", from, to) },
+                    onToggleEnabled = { id -> viewModel.toggleComponentEnabled("NR", id) },
+                    onResetToDefault = { viewModel.resetToDefault("NR") }
+                )
+                2 -> ComponentListWithReset(
+                    components = viewModel.lteCompressedComponents.collectAsState().value,
+                    onOrderChanged = { from, to -> viewModel.updateComponentOrder("LTE_Compressed", from, to) },
+                    onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE_Compressed", id) },
+                    onResetToDefault = { viewModel.resetToDefault("LTE_Compressed") }
+                )
+                3 -> ComponentListWithReset(
+                    components = viewModel.lteComponents.collectAsState().value,
+                    onOrderChanged = { from, to -> viewModel.updateComponentOrder("LTE", from, to) },
+                    onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE", id) },
+                    onResetToDefault = { viewModel.resetToDefault("LTE") }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun ComponentListWithReset(
+    components: List<CellComponent>,
+    onOrderChanged: (Int, Int) -> Unit,
+    onToggleEnabled: (String) -> Unit,
+    onResetToDefault: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(bottom = LocalConfiguration.current.screenHeightDp.dp * 0.1f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 80.dp) // Space for the button
+        ) {
+            ComponentList(
+                components = components,
+                onOrderChanged = onOrderChanged,
+                onToggleEnabled = onToggleEnabled
             )
-            1 -> ComponentList(
-                components = viewModel.nrComponents.collectAsState().value,
-                onOrderChanged = { from, to -> viewModel.updateComponentOrder("NR", from, to) },
-                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("NR", id) }
-            )
-            2 -> ComponentList(
-                components = viewModel.lteCompressedComponents.collectAsState().value,
-                onOrderChanged = { from, to -> viewModel.updateComponentOrder("LTE_Compressed", from, to) },
-                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE_Compressed", id) }
-            )
-            3 -> ComponentList(
-                components = viewModel.lteComponents.collectAsState().value,
-                onOrderChanged = { from, to -> viewModel.updateComponentOrder("LTE", from, to) },
-                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE", id) }
-            )
+        }
+
+        Button(
+            onClick = onResetToDefault,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp)
+        ) {
+            Text("Reset to Default")
         }
     }
 }
@@ -267,13 +323,14 @@ fun ComponentList(
         state = state.listState,
         modifier = Modifier.reorderable(state)
     ) {
-        itemsIndexed(components, { _, item -> item.id }) { _, item ->
+        itemsIndexed(components, { _, item -> item.id }) { index, item ->
             ReorderableItem(state, key = item.id) { isDragging ->
                 val elevation = if (isDragging) 16.dp else 0.dp
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(4.dp),
+                        .padding(4.dp)
+                        .then(if (index == components.lastIndex) Modifier.padding(bottom = 16.dp) else Modifier),
                     elevation = CardDefaults.cardElevation(elevation)
                 ) {
                     Row(
