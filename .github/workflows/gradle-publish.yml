@@ -33,12 +33,19 @@ jobs:
         echo "Keystore created at $(pwd)/my-release-key.keystore"
         echo "KEYSTORE_PATH=$(pwd)/my-release-key.keystore" >> $GITHUB_ENV
 
+    - name: Verify keystore file
+      run: |
+        ls -l $KEYSTORE_PATH
+        file $KEYSTORE_PATH
+
     - name: Build Signed APK
       env:
         KEYSTORE_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         KEYSTORE_PATH: ${{ env.KEYSTORE_PATH }}
         KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-      run: ./gradlew assembleRelease -PkeyStorePath=$KEYSTORE_PATH --info
+      run: |
+        echo "KEYSTORE_PATH is set to: $KEYSTORE_PATH"
+        ./gradlew assembleRelease --info
 
     - name: List build outputs
       run: ls -R app/build/outputs/
