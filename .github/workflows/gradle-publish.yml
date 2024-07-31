@@ -69,7 +69,14 @@ jobs:
           -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
           -H "Accept: application/vnd.github.v3+json" \
           https://api.github.com/orgs/${{ github.repository_owner }}/packages/generic/cellinfo/${{ steps.gradle_version.outputs.VERSION }})
-        echo "UPLOAD_URL=$(echo $response | jq -r '.url')" >> $GITHUB_OUTPUT
+        echo "API Response: $response"
+        upload_url=$(echo $response | jq -r '.url')
+        if [ "$upload_url" = "null" ] || [ -z "$upload_url" ]; then
+          echo "Error: Failed to get upload URL. API response:"
+          echo "$response"
+          exit 1
+        fi
+        echo "UPLOAD_URL=$upload_url" >> $GITHUB_OUTPUT
 
     - name: Upload APK to Package
       run: |
