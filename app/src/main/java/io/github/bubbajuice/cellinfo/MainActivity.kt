@@ -1,6 +1,7 @@
 package io.github.bubbajuice.cellinfo
 
 import android.Manifest
+import android.app.Application
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Bundle
@@ -12,30 +13,295 @@ import android.telephony.TelephonyManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.core.app.ActivityCompat
 import io.github.bubbajuice.cellinfo.ui.theme.MyApplicationTheme
-import kotlinx.coroutines.delay
 import kotlin.math.round
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.Serializable
+import org.burnoutcrew.reorderable.*
+
+@Serializable
+data class CellComponent(
+    val id: String,
+    val label: String,
+    var enabled: Boolean = true,
+    var order: Int
+)
+
+class SettingsViewModel(application: Application) : AndroidViewModel(application) {
+    private val sharedPreferences = application.getSharedPreferences("CellInfoSettings", Context.MODE_PRIVATE)
+
+    private val _nrComponents = MutableStateFlow<List<CellComponent>>(emptyList())
+    val nrComponents = _nrComponents.asStateFlow()
+
+    private val _lteComponents = MutableStateFlow<List<CellComponent>>(emptyList())
+    val lteComponents = _lteComponents.asStateFlow()
+
+    private val _nrCompressedComponents = MutableStateFlow<List<CellComponent>>(emptyList())
+    val nrCompressedComponents = _nrCompressedComponents.asStateFlow()
+
+    private val _lteCompressedComponents = MutableStateFlow<List<CellComponent>>(emptyList())
+    val lteCompressedComponents = _lteCompressedComponents.asStateFlow()
+
+    init {
+        loadSettings()
+    }
+
+    private fun loadSettings() {
+        viewModelScope.launch {
+            _nrComponents.value = loadComponentList("NR")
+            _lteComponents.value = loadComponentList("LTE")
+            _nrCompressedComponents.value = loadComponentList("NR_Compressed")
+            _lteCompressedComponents.value = loadComponentList("LTE_Compressed")
+        }
+    }
+
+    private fun loadComponentList(key: String): List<CellComponent> {
+        val json = sharedPreferences.getString(key, null)
+        return if (json != null) {
+            Json.decodeFromString(json)
+        } else {
+            getDefaultComponentList(key)
+        }
+    }
+
+    private fun getDefaultComponentList(key: String): List<CellComponent> {
+        return when (key) {
+            "NR_Compressed" -> listOf(
+                CellComponent("ssRSRP", "ssRSRP", true, 0),
+                CellComponent("ARFCN", "ARFCN", true, 1),
+                CellComponent("Band", "Band", true, 2),
+                CellComponent("Data", "Data", false, 3)
+                // Add more NR compressed components as needed
+            )
+
+            "NR" -> listOf(
+                CellComponent("ssRSRP", "ssRSRP", true, 0),
+                CellComponent("ARFCN", "ARFCN", true, 1),
+                CellComponent("Band", "Band", true, 2),
+                CellComponent("Data", "Data", false, 3)
+                // Add more NR components as needed
+            )
+
+            "LTE_Compressed" -> listOf(
+                CellComponent("eNB ID", "eNB ID", true, 0),
+                CellComponent("Cell Sector ID", "Cell Sector ID", true, 1),
+                CellComponent("Band Number", "Band Number", true, 2),
+                CellComponent("RSRP", "RSRP", true, 3),
+                CellComponent("RSRQ", "RSRQ", true, 4),
+                CellComponent("Timing Advance", "Timing Advance", false, 5),
+                CellComponent("Cell ID", "Cell ID", false, 6),
+                CellComponent("PCI", "PCI", false, 7),
+                CellComponent("EARFCN", "EARFCN", false, 8),
+                CellComponent("Bandwidth", "Bandwidth", false, 9),
+                CellComponent("TAC", "TAC", false, 10),
+                CellComponent("MCC", "MCC", false, 11),
+                CellComponent("MNC", "MNC", false, 12),
+                CellComponent("RSSI", "RSSI", false, 13),
+                CellComponent("RSSNR", "RSSNR", false, 14),
+                CellComponent("CQI", "CQI", false, 15),
+                CellComponent("Operator", "Operator", false, 16),
+                CellComponent("Operator Abbreviation", "Operator Abbreviation", false, 17),
+                CellComponent("Data", "Data", false, 18)
+                // Add more LTE compressed components as needed
+            )
+
+            "LTE" -> listOf(
+                CellComponent("eNB ID", "eNB ID", true, 0),
+                CellComponent("Cell Sector_ID", "Cell Sector ID", true, 1),
+                CellComponent("Band Number", "Band Number", true, 2),
+                CellComponent("RSRP", "RSRP", true, 3),
+                CellComponent("RSRQ", "RSRQ", true, 4),
+                CellComponent("Timing Advance", "Timing Advance", true, 5),
+                CellComponent("Cell ID", "Cell ID", true, 6),
+                CellComponent("PCI", "PCI", true, 7),
+                CellComponent("EARFCN", "EARFCN", true, 8),
+                CellComponent("Bandwidth", "Bandwidth", true, 9),
+                CellComponent("TAC", "TAC", true, 10),
+                CellComponent("MCC", "MCC", true, 11),
+                CellComponent("MNC", "MNC", true, 12),
+                CellComponent("RSSI", "RSSI", true, 13),
+                CellComponent("RSSNR", "RSSNR", true, 14),
+                CellComponent("CQI", "CQI", true, 15),
+                CellComponent("Operator", "Operator", true, 16),
+                CellComponent("Operator Abbreviation", "Operator Abbreviation", true, 17),
+                CellComponent("Data", "Data", false, 18)
+                // Add more LTE components as needed
+            )
+            else -> emptyList()
+        }
+    }
+
+    private fun saveComponentList(key: String, components: List<CellComponent>) {
+        val json = Json.encodeToString(components)
+        sharedPreferences.edit().putString(key, json).apply()
+    }
+
+    fun updateComponentOrder(type: String, fromIndex: Int, toIndex: Int) {
+        viewModelScope.launch {
+            val components = when (type) {
+                "NR" -> _nrComponents
+                "LTE" -> _lteComponents
+                "NR_Compressed" -> _nrCompressedComponents
+                "LTE_Compressed" -> _lteCompressedComponents
+                else -> return@launch
+            }
+
+            val updatedList = components.value.toMutableList()
+            val movedItem = updatedList.removeAt(fromIndex)
+            updatedList.add(toIndex, movedItem)
+            updatedList.forEachIndexed { index, component -> component.order = index }
+            components.value = updatedList
+            saveComponentList(type, updatedList)
+        }
+    }
+
+    fun toggleComponentEnabled(type: String, componentId: String) {
+        viewModelScope.launch {
+            val components = when (type) {
+                "NR" -> _nrComponents
+                "LTE" -> _lteComponents
+                "NR_Compressed" -> _nrCompressedComponents
+                "LTE_Compressed" -> _lteCompressedComponents
+                else -> return@launch
+            }
+
+            val updatedList = components.value.map { component ->
+                if (component.id == componentId) {
+                    component.copy(enabled = !component.enabled)
+                } else {
+                    component
+                }
+            }
+            components.value = updatedList
+            saveComponentList(type, updatedList)
+        }
+    }
+}
+
+@Composable
+fun SettingsScreen(
+    viewModel: SettingsViewModel,
+    selectedTab: Int,
+    onTabSelected: (Int) -> Unit
+) {
+    val tabs = listOf("NR Compressed", "NR", "LTE Compressed", "LTE")
+
+    Column {
+        TabRow(selectedTabIndex = selectedTab) {
+            tabs.forEachIndexed { index, title ->
+                Tab(
+                    text = { Text(title) },
+                    selected = selectedTab == index,
+                    onClick = { onTabSelected(index) }
+                )
+            }
+        }
+
+        when (selectedTab) {
+            0 -> ComponentList(
+                components = viewModel.nrCompressedComponents.collectAsState().value,
+                onOrderChanged = { from, to -> viewModel.updateComponentOrder("NR_Compressed", from, to) },
+                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("NR_Compressed", id) }
+            )
+            1 -> ComponentList(
+                components = viewModel.nrComponents.collectAsState().value,
+                onOrderChanged = { from, to -> viewModel.updateComponentOrder("NR", from, to) },
+                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("NR", id) }
+            )
+            2 -> ComponentList(
+                components = viewModel.lteCompressedComponents.collectAsState().value,
+                onOrderChanged = { from, to -> viewModel.updateComponentOrder("LTE_Compressed", from, to) },
+                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE_Compressed", id) }
+            )
+            3 -> ComponentList(
+                components = viewModel.lteComponents.collectAsState().value,
+                onOrderChanged = { from, to -> viewModel.updateComponentOrder("LTE", from, to) },
+                onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE", id) }
+            )
+        }
+    }
+}
+
+@Composable
+fun ComponentList(
+    components: List<CellComponent>,
+    onOrderChanged: (Int, Int) -> Unit,
+    onToggleEnabled: (String) -> Unit
+) {
+    val state = rememberReorderableLazyListState(onMove = { from, to ->
+        onOrderChanged(from.index, to.index)
+    })
+
+    LazyColumn(
+        state = state.listState,
+        modifier = Modifier.reorderable(state)
+    ) {
+        itemsIndexed(components, { _, item -> item.id }) { _, item ->
+            ReorderableItem(state, key = item.id) { isDragging ->
+                val elevation = if (isDragging) 16.dp else 0.dp
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    elevation = CardDefaults.cardElevation(elevation)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Checkbox(
+                            checked = item.enabled,
+                            onCheckedChange = { onToggleEnabled(item.id) }
+                        )
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Text(item.label, modifier = Modifier.weight(1f))
+                        Icon(
+                            imageVector = Icons.Default.Menu,
+                            contentDescription = "Drag handle",
+                            modifier = Modifier.detectReorder(state)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
 
 class MainActivity : ComponentActivity() {
-
+    private val settingsViewModel: SettingsViewModel by viewModels()
     private val permissions = arrayOf(
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -48,16 +314,46 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 var showPermissionDialog by remember { mutableStateOf(false) }
+                var currentPage by remember { mutableStateOf("Live") }
+                var selectedSettingsTab by remember { mutableStateOf(0) }
 
                 if (!hasPermissions()) {
                     requestPermissions.launch(permissions)
                 }
 
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    CellInfoScreen(
-                        context = this,
-                        modifier = Modifier.padding(innerPadding)
-                    )
+                Scaffold(
+                    modifier = Modifier.fillMaxSize(),
+                    bottomBar = {
+                        BottomNavBar(
+                            currentPage = currentPage,
+                            onPageChange = { page -> currentPage = page }
+                        )
+                    }
+                ) { innerPadding ->
+                    when (currentPage) {
+                        "Map" -> {
+                            // Placeholder for Map page
+                            Text("Map page (not yet implemented)", modifier = Modifier.padding(innerPadding))
+                        }
+                        "Log" -> {
+                            // Placeholder for Log page
+                            Text("Log page (not yet implemented)", modifier = Modifier.padding(innerPadding))
+                        }
+                        "Live" -> {
+                            CellInfoScreen(
+                                context = this,
+                                viewModel = settingsViewModel,
+                                modifier = Modifier.padding(innerPadding)
+                            )
+                        }
+                        "Settings" -> {
+                            SettingsScreen(
+                                viewModel = settingsViewModel,
+                                selectedTab = selectedSettingsTab,
+                                onTabSelected = { selectedSettingsTab = it }
+                            )
+                        }
+                    }
                 }
 
                 if (showPermissionDialog) {
@@ -123,9 +419,47 @@ fun PermissionDeniedDialog(onDismiss: () -> Unit) {
 }
 
 @Composable
-fun CellInfoScreen(context: Context, modifier: Modifier = Modifier) {
+fun BottomNavBar(
+    currentPage: String,
+    onPageChange: (String) -> Unit
+) {
+    NavigationBar {
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.LocationOn, contentDescription = "Map") },
+            label = { Text("Map") },
+            selected = currentPage == "Map",
+            onClick = { onPageChange("Map") }
+        )
+        NavigationBarItem(
+            icon = { Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Log") },
+            label = { Text("Log") },
+            selected = currentPage == "Log",
+            onClick = { onPageChange("Log") }
+        )
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.Call, contentDescription = "Live") },
+            label = { Text("Live") },
+            selected = currentPage == "Live",
+            onClick = { onPageChange("Live") }
+        )
+        NavigationBarItem(
+            icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+            label = { Text("Settings") },
+            selected = currentPage == "Settings",
+            onClick = { onPageChange("Settings") }
+        )
+    }
+}
+
+@Composable
+fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, modifier: Modifier = Modifier) {
     var cellInfoList by remember { mutableStateOf<List<CellInfo>>(emptyList()) }
     val expandedCells = remember { mutableStateOf<Map<Any, Boolean>>(emptyMap()) }
+
+    val nrComponents by viewModel.nrComponents.collectAsState()
+    val lteComponents by viewModel.lteComponents.collectAsState()
+    val nrCompressedComponents by viewModel.nrCompressedComponents.collectAsState()
+    val lteCompressedComponents by viewModel.lteCompressedComponents.collectAsState()
 
     LaunchedEffect(Unit) {
         while (true) {
@@ -148,11 +482,20 @@ fun CellInfoScreen(context: Context, modifier: Modifier = Modifier) {
         }
     }
 
-    CellInfoList(cellInfoList, expandedCells.value, onCellExpandChange = { cellId, isExpanded ->
-        expandedCells.value = expandedCells.value.toMutableMap().apply {
-            this[cellId] = isExpanded
-        }
-    }, modifier = modifier)
+    CellInfoList(
+        cellInfoList = cellInfoList,
+        expandedCells = expandedCells.value,
+        onCellExpandChange = { cellId, isExpanded ->
+            expandedCells.value = expandedCells.value.toMutableMap().apply {
+                this[cellId] = isExpanded
+            }
+        },
+        nrComponents = nrComponents,
+        lteComponents = lteComponents,
+        nrCompressedComponents = nrCompressedComponents,
+        lteCompressedComponents = lteCompressedComponents,
+        modifier = modifier
+    )
 }
 
 @Composable
@@ -160,6 +503,10 @@ fun CellInfoList(
     cellInfoList: List<CellInfo>,
     expandedCells: Map<Any, Boolean>,
     onCellExpandChange: (Any, Boolean) -> Unit,
+    nrComponents: List<CellComponent>,
+    lteComponents: List<CellComponent>,
+    nrCompressedComponents: List<CellComponent>,
+    lteCompressedComponents: List<CellComponent>,
     modifier: Modifier = Modifier
 ) {
     val groupedCells = cellInfoList.groupBy {
@@ -188,14 +535,18 @@ fun CellInfoList(
                         CellInfoItem(
                             cellInfo = firstCell,
                             isExpanded = expandedCells[cellId] ?: false,
-                            onExpandChange = { isExpanded -> onCellExpandChange(cellId, isExpanded) }
+                            onExpandChange = { isExpanded -> onCellExpandChange(cellId, isExpanded) },
+                            nrComponents = nrComponents,
+                            lteComponents = lteComponents,
+                            nrCompressedComponents = nrCompressedComponents,
+                            lteCompressedComponents = lteCompressedComponents
                         )
 
                         if (cells.size > 1) {
                             val groupExpanded = expandedCells[type] ?: false
                             ExpandableSection(
-                                expandedTitle = "Hide ${cells.size - 1} ${type} cells",
-                                collapsedTitle = "Show ${cells.size - 1} more ${type} cells",
+                                expandedTitle = "Hide ${cells.size - 1} $type cells",
+                                collapsedTitle = "Show ${cells.size - 1} more $type cells",
                                 expanded = groupExpanded,
                                 onExpandChange = { isExpanded -> onCellExpandChange(type, isExpanded) }
                             ) {
@@ -206,7 +557,11 @@ fun CellInfoList(
                                         isExpanded = expandedCells[additionalCellId] ?: false,
                                         onExpandChange = { isExpanded ->
                                             onCellExpandChange(additionalCellId, isExpanded)
-                                        }
+                                        },
+                                        nrComponents = nrComponents,
+                                        lteComponents = lteComponents,
+                                        nrCompressedComponents = nrCompressedComponents,
+                                        lteCompressedComponents = lteCompressedComponents
                                     )
                                 }
                             }
@@ -253,57 +608,27 @@ fun ExpandableSection(
 fun getCellId(cellInfo: CellInfo): Any {
     return when (cellInfo) {
         is CellInfoNr -> cellInfo.toString()
-        is CellInfoLte -> cellInfo.cellIdentity.ci
+        is CellInfoLte -> "${cellInfo.cellIdentity.ci}-${cellInfo.cellIdentity.earfcn}-${cellInfo.cellIdentity.pci}"
         else -> cellInfo.hashCode()
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CellInfoItem(
     cellInfo: CellInfo,
     isExpanded: Boolean,
-    onExpandChange: (Boolean) -> Unit
+    onExpandChange: (Boolean) -> Unit,
+    nrComponents: List<CellComponent>,
+    lteComponents: List<CellComponent>,
+    nrCompressedComponents: List<CellComponent>,
+    lteCompressedComponents: List<CellComponent>
 ) {
     var showDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
-    val cellInfoRows = if (isExpanded) {
-        when (cellInfo) {
-            is CellInfoNr -> formatCellInfoNr(cellInfo)
-            is CellInfoLte -> formatCellInfoLte(cellInfo)
-            else -> emptyList()
-        }
-    } else {
-        when (cellInfo) {
-            // 5G
-            is CellInfoNr -> {
-                val cellIdentity = cellInfo.cellIdentity as CellIdentityNr
-                val cellSignalStrength = cellInfo.cellSignalStrength
-                val band = getNrBandFromArfcn(cellIdentity.nrarfcn)
-                listOf(
-                    "eNB ID" to cellIdentity.nci.toString(),
-                    "ssRSRP" to cellSignalStrength.dbm.toString() + " dBm",
-                    "ARFCN" to cellIdentity.nrarfcn.toString(),
-                    "Band Number" to "n$band"
-                )
-            }
-            // 4G
-            is CellInfoLte -> {
-                val cellIdentity = cellInfo.cellIdentity
-                val cellSignalStrength = cellInfo.cellSignalStrength
-
-                val band = getLTEBandFromEArfcn(cellIdentity.earfcn)
-                val cellSectorId = calculateCellSectorId(formatCellID(cellIdentity.ci))
-                listOf(
-                    "eNB ID" to calculateENBId(formatCellID(cellIdentity.ci)),
-                    "Band Number" to band.toString(),
-                    "Cell Sector ID" to cellSectorId,
-                    "RSRP" to cellSignalStrength.rsrp.toString() + " dBm",
-                    "RSRQ" to cellSignalStrength.rsrq.toString() + " dB"
-                )
-            }
-            else -> emptyList()
-        }
+    val cellInfoRows = when (cellInfo) {
+        is CellInfoNr -> formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents, !isExpanded)
+        is CellInfoLte -> formatCellInfoLte(cellInfo, if (isExpanded) lteComponents else lteCompressedComponents, !isExpanded)
+        else -> emptyList()
     }
 
     Card(
@@ -409,18 +734,25 @@ fun getExplanation(label: String): String {
     }
 }
 
-fun formatCellInfoNr(cellInfoNr: CellInfoNr): List<Pair<String, String>> {
+fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>, isCompressed: Boolean): List<Pair<String, String>> {
     val cellIdentity = cellInfoNr.cellIdentity as CellIdentityNr
     val cellSignalStrength = cellInfoNr.cellSignalStrength
 
     val band = getNrBandFromArfcn(cellIdentity.nrarfcn)
 
-    return listOf(
-        "ssRSRP" to cellSignalStrength.dbm.toString() + " dBm",
+    val allComponents = listOf(
+        "ssRSRP" to (cellSignalStrength.dbm.toString() + " dBm"),
         "ARFCN" to cellIdentity.nrarfcn.toString(),
-        "Band" to "n$band",
-        "Data" to cellSignalStrength.toString() + cellIdentity.toString()
+        "Band Number" to "n$band",
+        "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
     )
+
+    return components
+        .filter { it.enabled }
+        .sortedBy { it.order }
+        .mapNotNull { component ->
+            allComponents.find { it.first == component.id }?.let { it.first to it.second }
+        }
 }
 
 fun getNrBandFromArfcn(arfcn: Int): Int {
@@ -507,7 +839,7 @@ fun getNrBandFromArfcn(arfcn: Int): Int {
     }
 }
 
-fun formatCellInfoLte(cellInfoLte: CellInfoLte): List<Pair<String, String>> {
+fun formatCellInfoLte(cellInfoLte: CellInfoLte, components: List<CellComponent>, isCompressed: Boolean): List<Pair<String, String>> {
     val cellIdentity = cellInfoLte.cellIdentity
     val cellSignalStrength = cellInfoLte.cellSignalStrength
 
@@ -518,28 +850,36 @@ fun formatCellInfoLte(cellInfoLte: CellInfoLte): List<Pair<String, String>> {
     val rssnr = formatRSSNR(cellSignalStrength.rssnr)
     val cellid = formatCellID(cellIdentity.ci)
     val band = getLTEBandFromEArfcn(cellIdentity.earfcn)
+    val bandwidth = formatBandwidth(cellIdentity.bandwidth)
 
-    return listOf(
+    val allComponents = listOf(
         "eNB ID" to eNodeBId,
         "Cell Sector ID" to cellSectorId,
         "Band Number" to band.toString(),
-        "RSRP" to cellSignalStrength.rsrp.toString() + " dBm",
-        "RSRQ" to cellSignalStrength.rsrq.toString() + " dB",
+        "RSRP" to (cellSignalStrength.rsrp.toString() + " dBm"),
+        "RSRQ" to (cellSignalStrength.rsrq.toString() + " dB"),
         "Timing Advance" to timingAdvance,
         "Cell ID" to cellid,
         "PCI" to cellIdentity.pci.toString(),
         "EARFCN" to cellIdentity.earfcn.toString(),
-        "Bandwidth" to cellIdentity.bandwidth.toString(),
+        "Bandwidth" to bandwidth,
         "TAC" to cellIdentity.tac.toString(),
         "MCC" to (cellIdentity.mccString ?: ""),
         "MNC" to (cellIdentity.mncString ?: ""),
-        "RSSI" to cellSignalStrength.rssi.toString() + " dBm",
+        "RSSI" to (cellSignalStrength.rssi.toString() + " dBm"),
         "RSSNR" to "$rssnr dB",
         "CQI" to "$cqi dB",
         "Operator" to (cellIdentity.operatorAlphaLong?.toString() ?: ""),
         "Operator Abbreviation" to (cellIdentity.operatorAlphaShort?.toString() ?: ""),
-        "Data" to cellSignalStrength.toString() + cellIdentity.toString(),
+        "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
     )
+
+    return components
+        .filter { it.enabled }
+        .sortedBy { it.order }
+        .mapNotNull { component ->
+            allComponents.find { it.first == component.id }?.let { it.first to it.second }
+        }
 }
 
 fun getLTEBandFromEArfcn(earfcn: Int): Int {
@@ -627,6 +967,14 @@ fun formatCQI(cqi: Int): String{
     }
 }
 
+fun formatBandwidth(bandwidth: Int): String{
+    return if (bandwidth == 2147483647) {
+        "n/a"
+    } else {
+        "$bandwidth"
+    }
+}
+
 fun formatRSSNR(rssnr: Int): String{
     return if (rssnr == 0) {
         "n/a"
@@ -668,13 +1016,5 @@ fun calculateENBId(eci: String): String {
     } else {
         val eNodeBId = (eci.toInt() / 256).toString()
         return eNodeBId
-    }
-}
-
-@Preview(showBackground = true)
-@Composable
-fun CellInfoScreenPreview() {
-    MyApplicationTheme {
-        CellInfoScreen(context = LocalContext.current)
     }
 }
