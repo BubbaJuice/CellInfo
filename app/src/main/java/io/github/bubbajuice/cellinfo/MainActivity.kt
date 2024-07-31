@@ -138,7 +138,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 
             "LTE" -> listOf(
                 CellComponent("eNB ID", "eNB ID", true, 0),
-                CellComponent("Cell Sector_ID", "Cell Sector ID", true, 1),
+                CellComponent("Cell Sector ID", "Cell Sector ID", true, 1),
                 CellComponent("Band Number", "Band Number", true, 2),
                 CellComponent("RSRP", "RSRP", true, 3),
                 CellComponent("RSRQ", "RSRQ", true, 4),
@@ -273,13 +273,13 @@ fun ComponentList(
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(8.dp),
+                        .padding(4.dp),
                     elevation = CardDefaults.cardElevation(elevation)
                 ) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(16.dp),
+                            .padding(4.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Checkbox(
