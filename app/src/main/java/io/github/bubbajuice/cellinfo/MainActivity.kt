@@ -2,14 +2,23 @@ package io.github.bubbajuice.cellinfo
 
 import android.Manifest
 import android.app.Application
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.app.Service
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.icu.text.SimpleDateFormat
 import android.os.Bundle
+import android.os.IBinder
 import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.TelephonyManager
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +29,7 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -33,23 +43,324 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.core.app.ActivityCompat
+import androidx.core.app.NotificationCompat
+import androidx.room.*
 import io.github.bubbajuice.cellinfo.ui.theme.MyApplicationTheme
 import kotlin.math.round
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
 import org.burnoutcrew.reorderable.*
+import java.util.Date
+import java.util.Locale
+
+@Entity(tableName = "logged_cells")
+data class LoggedCell(
+    @PrimaryKey val cellId: String,
+    val type: String,
+    val timestamp: Long,
+    val enbId: String?,
+    val earfcn: String?,
+    val pci: String?,
+    val cellSector: String?,
+    val bandNumber: String?,
+    val tac: String?,
+    val mcc: String?,
+    val mnc: String?,
+    val operator: String?
+)
+
+class CellLoggingService : Service() {
+    private lateinit var cellDatabase: CellDatabase
+    private lateinit var telephonyManager: TelephonyManager
+    private lateinit var settingsViewModel: SettingsViewModel
+    private val serviceScope = CoroutineScope(Dispatchers.Default)
+    private var loggingJob: Job? = null
+
+    private fun clearDatabase() {
+        CoroutineScope(Dispatchers.IO).launch {
+            cellDatabase.clearAllTables()
+        }
+    }
+
+    override fun onCreate() {
+        super.onCreate()
+        cellDatabase = CellDatabase.getInstance(applicationContext)
+        clearDatabase()
+        telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
+        settingsViewModel = SettingsViewModel(application)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(NOTIFICATION_ID, createNotification())
+        startLogging()
+        return START_STICKY
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        super.onDestroy()
+        stopLogging()
+    }
+
+    private fun startLogging() {
+        loggingJob = serviceScope.launch {
+            while (isActive) {
+                logCells()
+                delay(1000) // Log every second
+            }
+        }
+    }
+
+    private fun stopLogging() {
+        loggingJob?.cancel()
+        serviceScope.cancel()
+    }
+
+    private suspend fun logCells() {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED
+        ) {
+            val cellInfoList = withContext(Dispatchers.Default) {
+                telephonyManager.allCellInfo
+            }
+            cellInfoList.forEach { cellInfo ->
+                when (cellInfo) {
+                    is CellInfoNr -> logNrCell(cellInfo)
+                    is CellInfoLte -> logLteCell(cellInfo)
+                }
+            }
+        }
+    }
+
+    private suspend fun logNrCell(cellInfo: CellInfoNr) {
+        val cellIdentity = cellInfo.cellIdentity as? CellIdentityNr ?: return
+        val cellId = cellIdentity.nci.toString()
+        logCell(
+            "NR",
+            cellId,
+            null, // eNB ID not applicable for NR
+            cellIdentity.nrarfcn.toString(),
+            cellIdentity.pci.toString(),
+            null, // Cell sector not applicable for NR
+            getNrBandFromArfcn(cellIdentity.nrarfcn).toString(),
+            cellIdentity.tac.toString(),
+            cellIdentity.mccString,
+            cellIdentity.mncString,
+            cellIdentity.operatorAlphaLong?.toString()
+        )
+    }
+
+    private suspend fun logLteCell(cellInfo: CellInfoLte) {
+        val cellIdentity = cellInfo.cellIdentity
+        val cellId = cellIdentity.ci.toString()
+        logCell(
+            "LTE",
+            cellId,
+            calculateENBId(cellId),
+            cellIdentity.earfcn.toString(),
+            cellIdentity.pci.toString(),
+            calculateCellSectorId(cellId),
+            getLTEBandFromEArfcn(cellIdentity.earfcn).toString(),
+            cellIdentity.tac.toString(),
+            cellIdentity.mccString,
+            cellIdentity.mncString,
+            cellIdentity.operatorAlphaLong?.toString()
+        )
+    }
+
+    private fun logCell(
+        type: String,
+        cellId: String,
+        enbId: String?,
+        earfcn: String?,
+        pci: String?,
+        cellSector: String?,
+        bandNumber: String?,
+        tac: String?,
+        mcc: String?,
+        mnc: String?,
+        operator: String?
+    ) {
+        val loggedCell = LoggedCell(
+            cellId,
+            type,
+            System.currentTimeMillis(),
+            enbId,
+            earfcn,
+            pci,
+            cellSector,
+            bandNumber,
+            tac,
+            mcc,
+            mnc,
+            operator
+        )
+        serviceScope.launch(Dispatchers.IO) {
+            cellDatabase.cellDao().insert(loggedCell)
+            checkForNewCell(loggedCell)
+        }
+    }
+
+    private fun checkForNewCell(loggedCell: LoggedCell) {
+        serviceScope.launch(Dispatchers.IO) {
+            val isNewCell = cellDatabase.cellDao().getCellCount(loggedCell.cellId) == 1
+            if (isNewCell) {
+                withContext(Dispatchers.Main) {
+                    showNewCellNotification(loggedCell)
+                }
+            }
+        }
+    }
+
+    private fun showNewCellNotification(loggedCell: LoggedCell) {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("New Cell Detected")
+            .setContentText("${loggedCell.type} cell with ID ${loggedCell.cellId}")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(NEW_CELL_NOTIFICATION_ID, notification)
+    }
+
+    private fun createNotification(): Notification {
+        val notificationIntent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE
+        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Cell Logging Service")
+            .setContentText("Logging cells in the background")
+            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setContentIntent(pendingIntent)
+            .build()
+    }
+
+    companion object {
+        const val CHANNEL_ID = "CellLoggingChannel"
+        private const val NOTIFICATION_ID = 1
+        private const val NEW_CELL_NOTIFICATION_ID = 2
+    }
+}
+
+@Dao
+interface CellDao {
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    fun insert(cell: LoggedCell)
+
+    @Query("SELECT COUNT(*) FROM logged_cells WHERE cellId = :cellId")
+    fun getCellCount(cellId: String): Int
+
+    @Query("SELECT * FROM logged_cells ORDER BY timestamp DESC")
+    fun getAllCells(): Flow<List<LoggedCell>>
+}
+
+@Database(entities = [LoggedCell::class], version = 2, exportSchema = false)
+abstract class CellDatabase : RoomDatabase() {
+    abstract fun cellDao(): CellDao
+
+    companion object {
+        private var instance: CellDatabase? = null
+
+        fun getInstance(context: Context): CellDatabase {
+            return instance ?: synchronized(this) {
+                instance ?: buildDatabase(context).also { instance = it }
+            }
+        }
+
+        private fun buildDatabase(context: Context): CellDatabase {
+            return Room.databaseBuilder(
+                context.applicationContext,
+                CellDatabase::class.java,
+                "cell_database"
+            )
+                .fallbackToDestructiveMigration() // This will recreate the database if the version changes
+                .build()
+        }
+    }
+}
+
+class Converters {
+    @TypeConverter
+    fun fromTimestamp(value: Long?): Date? {
+        return value?.let { Date(it) }
+    }
+
+    @TypeConverter
+    fun dateToTimestamp(date: Date?): Long? {
+        return date?.time
+    }
+}
+
+@Composable
+fun LogPage(cellDatabase: CellDatabase) {
+    val cells by cellDatabase.cellDao().getAllCells().collectAsState(initial = emptyList())
+
+    LazyColumn {
+        items(cells) { cell ->
+            LoggedCellItem(cell)
+        }
+    }
+}
+
+@Composable
+fun LoggedCellItem(cell: LoggedCell) {
+    // Skip cells with cellId 268435455
+    if (cell.cellId == "268435455") {
+        return
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(8.dp),
+        elevation = CardDefaults.cardElevation(4.dp)
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("${cell.type} Cell", style = MaterialTheme.typography.titleMedium)
+            Text("Cell ID: ${cell.cellId}", style = MaterialTheme.typography.bodyMedium)
+            Text("eNB ID: ${cell.enbId ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("EARFCN: ${cell.earfcn ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("PCI: ${cell.pci ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("Cell Sector: ${cell.cellSector ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("Band Number: ${cell.bandNumber ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("TAC: ${cell.tac ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("MCC: ${cell.mcc ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("MNC: ${cell.mnc ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("Operator: ${cell.operator ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text(
+                "Logged: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(cell.timestamp))}",
+                style = MaterialTheme.typography.bodySmall
+            )
+        }
+    }
+}
 
 @Serializable
 data class CellComponent(
@@ -359,6 +670,7 @@ fun ComponentList(
 
 class MainActivity : ComponentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels()
+    private lateinit var cellDatabase: CellDatabase
     private val permissions = arrayOf(
         Manifest.permission.READ_PHONE_STATE,
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -367,6 +679,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        cellDatabase = CellDatabase.getInstance(applicationContext)
+
+        createNotificationChannel()
+        startCellLoggingService()
 
         setContent {
             MyApplicationTheme {
@@ -393,8 +709,7 @@ class MainActivity : ComponentActivity() {
                             Text("Map page (not yet implemented)", modifier = Modifier.padding(innerPadding))
                         }
                         "Log" -> {
-                            // Placeholder for Log page
-                            Text("Log page (not yet implemented)", modifier = Modifier.padding(innerPadding))
+                            LogPage(cellDatabase)
                         }
                         "Live" -> {
                             CellInfoScreen(
@@ -421,6 +736,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    private fun createNotificationChannel() {
+        val channel = NotificationChannel(
+            CellLoggingService.CHANNEL_ID,
+            "Cell Logging Channel",
+            NotificationManager.IMPORTANCE_DEFAULT
+        )
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.createNotificationChannel(channel)
+    }
+
+    private fun startCellLoggingService() {
+        val serviceIntent = Intent(this, CellLoggingService::class.java)
+        startForegroundService(serviceIntent)
     }
 
     private val requestPermissions =
