@@ -18,7 +18,6 @@ import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.TelephonyManager
-import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,6 +29,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -43,7 +43,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -72,6 +71,11 @@ import kotlinx.serialization.Serializable
 import org.burnoutcrew.reorderable.*
 import java.util.Date
 import java.util.Locale
+
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.padding
 
 @Entity(tableName = "logged_cells")
 data class LoggedCell(
@@ -105,7 +109,6 @@ class CellLoggingService : Service() {
     override fun onCreate() {
         super.onCreate()
         cellDatabase = CellDatabase.getInstance(applicationContext)
-        clearDatabase()
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         settingsViewModel = SettingsViewModel(application)
     }
@@ -319,11 +322,20 @@ class Converters {
 }
 
 @Composable
-fun LogPage(cellDatabase: CellDatabase) {
+fun LogPage(cellDatabase: CellDatabase, innerPadding: PaddingValues) {
     val cells by cellDatabase.cellDao().getAllCells().collectAsState(initial = emptyList())
+    val listState = rememberLazyListState()
 
-    LazyColumn {
-        items(cells) { cell ->
+    val cellsToShow by remember {
+        derivedStateOf { cells.filter { it.cellId != "268435455" } }
+    }
+
+    LazyColumn(
+        state = listState,
+        contentPadding = innerPadding,
+        modifier = Modifier.fillMaxSize()
+    ) {
+        items(cellsToShow, key = { it.cellId }) { cell ->
             LoggedCellItem(cell)
         }
     }
@@ -709,8 +721,7 @@ class MainActivity : ComponentActivity() {
                             Text("Map page (not yet implemented)", modifier = Modifier.padding(innerPadding))
                         }
                         "Log" -> {
-                            LogPage(cellDatabase)
-                        }
+                            LogPage(cellDatabase, innerPadding)                        }
                         "Live" -> {
                             CellInfoScreen(
                                 context = this,
@@ -1013,8 +1024,8 @@ fun CellInfoItem(
     var showDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val cellInfoRows = when (cellInfo) {
-        is CellInfoNr -> formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents, !isExpanded)
-        is CellInfoLte -> formatCellInfoLte(cellInfo, if (isExpanded) lteComponents else lteCompressedComponents, !isExpanded)
+        is CellInfoNr -> formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents)
+        is CellInfoLte -> formatCellInfoLte(cellInfo, if (isExpanded) lteComponents else lteCompressedComponents)
         else -> emptyList()
     }
 
@@ -1121,7 +1132,7 @@ fun getExplanation(label: String): String {
     }
 }
 
-fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>, isCompressed: Boolean): List<Pair<String, String>> {
+fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>): List<Pair<String, String>> {
     val cellIdentity = cellInfoNr.cellIdentity as CellIdentityNr
     val cellSignalStrength = cellInfoNr.cellSignalStrength
 
@@ -1226,7 +1237,7 @@ fun getNrBandFromArfcn(arfcn: Int): Int {
     }
 }
 
-fun formatCellInfoLte(cellInfoLte: CellInfoLte, components: List<CellComponent>, isCompressed: Boolean): List<Pair<String, String>> {
+fun formatCellInfoLte(cellInfoLte: CellInfoLte, components: List<CellComponent>): List<Pair<String, String>> {
     val cellIdentity = cellInfoLte.cellIdentity
     val cellSignalStrength = cellInfoLte.cellSignalStrength
 
