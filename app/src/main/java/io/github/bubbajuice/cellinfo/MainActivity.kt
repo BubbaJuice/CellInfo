@@ -72,11 +72,6 @@ import org.burnoutcrew.reorderable.*
 import java.util.Date
 import java.util.Locale
 
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.foundation.layout.padding
-
 @Entity(tableName = "logged_cells")
 data class LoggedCell(
     @PrimaryKey val cellId: String,
@@ -99,7 +94,9 @@ class CellLoggingService : Service() {
     private lateinit var settingsViewModel: SettingsViewModel
     private val serviceScope = CoroutineScope(Dispatchers.Default)
     private var loggingJob: Job? = null
+    private val notifiedCells = mutableSetOf<String>()
 
+    // Don't delete save for feature to clear database
     private fun clearDatabase() {
         CoroutineScope(Dispatchers.IO).launch {
             cellDatabase.clearAllTables()
@@ -158,7 +155,7 @@ class CellLoggingService : Service() {
         }
     }
 
-    private suspend fun logNrCell(cellInfo: CellInfoNr) {
+    private fun logNrCell(cellInfo: CellInfoNr) {
         val cellIdentity = cellInfo.cellIdentity as? CellIdentityNr ?: return
         val cellId = cellIdentity.nci.toString()
         logCell(
@@ -176,7 +173,7 @@ class CellLoggingService : Service() {
         )
     }
 
-    private suspend fun logLteCell(cellInfo: CellInfoLte) {
+    private fun logLteCell(cellInfo: CellInfoLte) {
         val cellIdentity = cellInfo.cellIdentity
         val cellId = cellIdentity.ci.toString()
         logCell(
@@ -230,10 +227,11 @@ class CellLoggingService : Service() {
     private fun checkForNewCell(loggedCell: LoggedCell) {
         serviceScope.launch(Dispatchers.IO) {
             val isNewCell = cellDatabase.cellDao().getCellCount(loggedCell.cellId) == 1
-            if (isNewCell) {
+            if (isNewCell && !notifiedCells.contains(loggedCell.cellId)) {
                 withContext(Dispatchers.Main) {
                     showNewCellNotification(loggedCell)
                 }
+                notifiedCells.add(loggedCell.cellId)
             }
         }
     }
@@ -306,18 +304,6 @@ abstract class CellDatabase : RoomDatabase() {
                 .fallbackToDestructiveMigration() // This will recreate the database if the version changes
                 .build()
         }
-    }
-}
-
-class Converters {
-    @TypeConverter
-    fun fromTimestamp(value: Long?): Date? {
-        return value?.let { Date(it) }
-    }
-
-    @TypeConverter
-    fun dateToTimestamp(date: Date?): Long? {
-        return date?.time
     }
 }
 
@@ -700,7 +686,7 @@ class MainActivity : ComponentActivity() {
             MyApplicationTheme {
                 var showPermissionDialog by remember { mutableStateOf(false) }
                 var currentPage by remember { mutableStateOf("Live") }
-                var selectedSettingsTab by remember { mutableStateOf(0) }
+                var selectedSettingsTab by remember { mutableIntStateOf(0) }
 
                 if (!hasPermissions()) {
                     requestPermissions.launch(permissions)
