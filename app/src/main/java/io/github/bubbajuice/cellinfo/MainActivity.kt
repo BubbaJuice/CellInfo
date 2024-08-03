@@ -65,8 +65,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.encodeToString
@@ -75,6 +77,10 @@ import kotlinx.serialization.Serializable
 import org.burnoutcrew.reorderable.*
 import java.util.Date
 import java.util.Locale
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 @Entity(tableName = "logged_cells")
 data class LoggedCell(
@@ -802,6 +808,7 @@ class MainActivity : ComponentActivity() {
                             CellInfoScreen(
                                 context = this,
                                 viewModel = settingsViewModel,
+                                cellDatabase,
                                 modifier = Modifier.padding(innerPadding)
                             )
                         }
@@ -937,9 +944,10 @@ fun BottomNavBar(
 }
 
 @Composable
-fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, modifier: Modifier = Modifier) {
+fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, cellDatabase: CellDatabase, modifier: Modifier = Modifier) {
     var cellInfoList by remember { mutableStateOf<List<CellInfo>>(emptyList()) }
     val expandedCells = remember { mutableStateOf<Map<Any, Boolean>>(emptyMap()) }
+    var currentLocation by remember { mutableStateOf<Location?>(null) }
 
     val nrComponents by viewModel.nrComponents.collectAsState()
     val lteComponents by viewModel.lteComponents.collectAsState()
@@ -962,6 +970,7 @@ fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, modifier: Mod
                             else -> -1
                         }
                     }
+                currentLocation = getLastKnownLocation(context)
             }
             delay(1000)
         }
@@ -969,6 +978,8 @@ fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, modifier: Mod
 
     CellInfoList(
         cellInfoList = cellInfoList,
+        currentLocation = currentLocation,
+        cellDatabase = cellDatabase,
         expandedCells = expandedCells.value,
         onCellExpandChange = { cellId, isExpanded ->
             expandedCells.value = expandedCells.value.toMutableMap().apply {
@@ -983,9 +994,67 @@ fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, modifier: Mod
     )
 }
 
+fun getLastKnownLocation(context: Context): Location? {
+    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    if (ActivityCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION
+        ) != PackageManager.PERMISSION_GRANTED
+    ) {
+        return null
+    }
+
+    val providers = locationManager.getProviders(true)
+    var bestLocation: Location? = null
+    for (provider in providers) {
+        val location = locationManager.getLastKnownLocation(provider) ?: continue
+        if (bestLocation == null || location.accuracy < bestLocation.accuracy) {
+            bestLocation = location
+        }
+    }
+    return bestLocation
+}
+
+suspend fun findMatchingLoggedCell(
+    cellDatabase: CellDatabase,
+    earfcn: Int,
+    pci: Int,
+    currentLocation: Location?
+): LoggedCell? {
+    val loggedCells = cellDatabase.cellDao().getAllCells().first()
+    return loggedCells.find { loggedCell ->
+        loggedCell.earfcn == earfcn.toString() &&
+                loggedCell.pci == pci.toString() &&
+                currentLocation != null &&
+                loggedCell.bestLatitude != null &&
+                loggedCell.bestLongitude != null &&
+                calculateDistance(
+                    currentLocation.latitude, currentLocation.longitude,
+                    loggedCell.bestLatitude!!, loggedCell.bestLongitude!!
+                ) <= 20 * 1609.34 // 20 miles in meters
+    }
+}
+
+fun calculateDistance(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val r = 6371e3 // Earth's radius in meters
+    val w = lat1 * Math.PI / 180
+    val x = lat2 * Math.PI / 180
+    val y = (lat2 - lat1) * Math.PI / 180
+    val z = (lon2 - lon1) * Math.PI / 180
+
+    val a = sin(y / 2) * sin(y / 2) +
+            cos(w) * cos(x) *
+            sin(z / 2) * sin(z / 2)
+    val c = 2 * atan2(sqrt(a), sqrt(1 - a))
+
+    return r * c
+}
+
 @Composable
 fun CellInfoList(
     cellInfoList: List<CellInfo>,
+    currentLocation: Location?,
+    cellDatabase: CellDatabase,
     expandedCells: Map<Any, Boolean>,
     onCellExpandChange: (Any, Boolean) -> Unit,
     nrComponents: List<CellComponent>,
@@ -1024,7 +1093,9 @@ fun CellInfoList(
                             nrComponents = nrComponents,
                             lteComponents = lteComponents,
                             nrCompressedComponents = nrCompressedComponents,
-                            lteCompressedComponents = lteCompressedComponents
+                            lteCompressedComponents = lteCompressedComponents,
+                            cellDatabase = cellDatabase,
+                            currentLocation = currentLocation
                         )
 
                         if (cells.size > 1) {
@@ -1046,7 +1117,9 @@ fun CellInfoList(
                                         nrComponents = nrComponents,
                                         lteComponents = lteComponents,
                                         nrCompressedComponents = nrCompressedComponents,
-                                        lteCompressedComponents = lteCompressedComponents
+                                        lteCompressedComponents = lteCompressedComponents,
+                                        cellDatabase = cellDatabase,
+                                        currentLocation = currentLocation
                                     )
                                 }
                             }
@@ -1106,13 +1179,20 @@ fun CellInfoItem(
     nrComponents: List<CellComponent>,
     lteComponents: List<CellComponent>,
     nrCompressedComponents: List<CellComponent>,
-    lteCompressedComponents: List<CellComponent>
+    lteCompressedComponents: List<CellComponent>,
+    cellDatabase: CellDatabase,
+    currentLocation: Location?
 ) {
     var showDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val cellInfoRows = when (cellInfo) {
         is CellInfoNr -> formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents)
-        is CellInfoLte -> formatCellInfoLte(cellInfo, if (isExpanded) lteComponents else lteCompressedComponents)
+        is CellInfoLte -> formatCellInfoLte(
+            cellInfo,
+            if (isExpanded) lteComponents else lteCompressedComponents,
+            cellDatabase,
+            currentLocation
+        )
         else -> emptyList()
     }
 
@@ -1324,16 +1404,28 @@ fun getNrBandFromArfcn(arfcn: Int): Int {
     }
 }
 
-fun formatCellInfoLte(cellInfoLte: CellInfoLte, components: List<CellComponent>): List<Pair<String, String>> {
+fun formatCellInfoLte(
+    cellInfoLte: CellInfoLte,
+    components: List<CellComponent>,
+    cellDatabase: CellDatabase,
+    currentLocation: Location?
+): List<Pair<String, String>> = runBlocking {
     val cellIdentity = cellInfoLte.cellIdentity
     val cellSignalStrength = cellInfoLte.cellSignalStrength
 
-    val eNodeBId = calculateENBId(formatCellID(cellIdentity.ci))
-    val cellSectorId = calculateCellSectorId(formatCellID(cellIdentity.ci))
+    val cellId = cellIdentity.ci
+    val isInvalidCellId = cellId == 268435455 || cellId == 2147483647
+
+    val matchingLoggedCell = if (isInvalidCellId) {
+        findMatchingLoggedCell(cellDatabase, cellIdentity.earfcn, cellIdentity.pci, currentLocation)
+    } else null
+
+    val eNodeBId = calculateENBId(formatCellID(matchingLoggedCell?.cellId?.toInt() ?: cellId))
+    val cellSectorId = calculateCellSectorId(formatCellID(matchingLoggedCell?.cellId?.toInt() ?: cellId))
     val timingAdvance = formatTimingAdvance(cellSignalStrength.timingAdvance)
     val cqi = formatCQI(cellSignalStrength.cqi)
     val rssnr = formatRSSNR(cellSignalStrength.rssnr)
-    val cellid = formatCellID(cellIdentity.ci)
+    val cellid = if (isInvalidCellId) matchingLoggedCell?.cellId ?: "n/a" else formatCellID(cellId)
     val band = getLTEBandFromEArfcn(cellIdentity.earfcn)
     val bandwidth = formatBandwidth(cellIdentity.bandwidth)
 
@@ -1348,18 +1440,18 @@ fun formatCellInfoLte(cellInfoLte: CellInfoLte, components: List<CellComponent>)
         "PCI" to cellIdentity.pci.toString(),
         "EARFCN" to cellIdentity.earfcn.toString(),
         "Bandwidth" to bandwidth,
-        "TAC" to cellIdentity.tac.toString(),
-        "MCC" to (cellIdentity.mccString ?: ""),
-        "MNC" to (cellIdentity.mncString ?: ""),
+        "TAC" to (matchingLoggedCell?.tac ?: cellIdentity.tac.toString()),
+        "MCC" to (matchingLoggedCell?.mcc ?: cellIdentity.mccString ?: ""),
+        "MNC" to (matchingLoggedCell?.mnc ?: cellIdentity.mncString ?: ""),
         "RSSI" to (cellSignalStrength.rssi.toString() + " dBm"),
         "RSSNR" to "$rssnr dB",
         "CQI" to "$cqi dB",
-        "Operator" to (cellIdentity.operatorAlphaLong?.toString() ?: ""),
+        "Operator" to (matchingLoggedCell?.operator ?: cellIdentity.operatorAlphaLong?.toString() ?: ""),
         "Operator Abbreviation" to (cellIdentity.operatorAlphaShort?.toString() ?: ""),
         "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
     )
 
-    return components
+    return@runBlocking components
         .filter { it.enabled }
         .sortedBy { it.order }
         .mapNotNull { component ->
