@@ -50,13 +50,19 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
-import androidx.lifecycle.AndroidViewModel
-import androidx.lifecycle.viewModelScope
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import io.github.bubbajuice.cellinfo.ui.theme.MyApplicationTheme
+import java.util.Date
+import java.util.Locale
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.round
+import kotlin.math.sin
+import kotlin.math.sqrt
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -75,12 +81,6 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.Serializable
 import org.burnoutcrew.reorderable.*
-import java.util.Date
-import java.util.Locale
-import kotlin.math.atan2
-import kotlin.math.cos
-import kotlin.math.sin
-import kotlin.math.sqrt
 
 @Entity(tableName = "logged_cells")
 data class LoggedCell(
