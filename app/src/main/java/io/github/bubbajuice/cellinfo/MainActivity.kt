@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.icu.text.SimpleDateFormat
+import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
 import android.telephony.CellIdentityNr
@@ -313,8 +314,7 @@ fun LogPage(cellDatabase: CellDatabase, innerPadding: PaddingValues) {
     val listState = rememberLazyListState()
 
     val cellsToShow by remember {
-        derivedStateOf { cells.filter { it.cellId != "268435455" } }
-    }
+        derivedStateOf { cells.filter { it.cellId != "268435455" && it.cellId != "2147483647" } }    }
 
     LazyColumn(
         state = listState,
@@ -329,8 +329,8 @@ fun LogPage(cellDatabase: CellDatabase, innerPadding: PaddingValues) {
 
 @Composable
 fun LoggedCellItem(cell: LoggedCell) {
-    // Skip cells with cellId 268435455
-    if (cell.cellId == "268435455") {
+    // Skip cells with cellId 268435455 or 2147483647
+    if (cell.cellId == "268435455" || cell.cellId == "2147483647") {
         return
     }
 
@@ -669,11 +669,20 @@ fun ComponentList(
 class MainActivity : ComponentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels()
     private lateinit var cellDatabase: CellDatabase
-    private val permissions = arrayOf(
-        Manifest.permission.READ_PHONE_STATE,
-        Manifest.permission.ACCESS_FINE_LOCATION,
-        Manifest.permission.ACCESS_COARSE_LOCATION
-    )
+    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        arrayOf(
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.POST_NOTIFICATIONS
+        )
+    } else {
+        arrayOf(
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION
+        )
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -688,7 +697,7 @@ class MainActivity : ComponentActivity() {
                 var currentPage by remember { mutableStateOf("Live") }
                 var selectedSettingsTab by remember { mutableIntStateOf(0) }
 
-                if (!hasPermissions()) {
+                if (!hasPermissions() || !hasNotificationPermission()) {
                     requestPermissions.launch(permissions)
                 }
 
@@ -735,6 +744,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun hasNotificationPermission(): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            true // Permission not required for Android versions below 13
+        }
+    }
+
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
             CellLoggingService.CHANNEL_ID,
@@ -761,7 +781,7 @@ class MainActivity : ComponentActivity() {
     private fun hasPermissions(): Boolean {
         return permissions.all {
             ActivityCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
-        }
+        } && hasNotificationPermission()
     }
 
     private fun showPermissionDeniedDialog() {
@@ -1378,7 +1398,7 @@ fun formatTimingAdvance(timingAdvance: Int): String {
 }
 
 fun formatCellID(cellid: Int): String {
-    return if (cellid == 268435455) {
+    return if (cellid == 268435455 || cellid == 2147483647) {
         "n/a"
     } else {
         "$cellid"
