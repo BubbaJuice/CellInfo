@@ -11,6 +11,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.icu.text.SimpleDateFormat
+import android.location.Location
+import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
 import android.os.IBinder
@@ -18,6 +20,7 @@ import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
+import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -77,7 +80,7 @@ import java.util.Locale
 data class LoggedCell(
     @PrimaryKey val cellId: String,
     val type: String,
-    val timestamp: Long,
+    var timestamp: Long,
     val enbId: String?,
     val earfcn: String?,
     val pci: String?,
@@ -86,13 +89,20 @@ data class LoggedCell(
     val tac: String?,
     val mcc: String?,
     val mnc: String?,
-    val operator: String?
+    val operator: String?,
+    var rsrp: Int?,
+    var latitude: Double?,
+    var longitude: Double?,
+    var bestRsrp: Int?,
+    var bestLatitude: Double?,
+    var bestLongitude: Double?
 )
 
 class CellLoggingService : Service() {
     private lateinit var cellDatabase: CellDatabase
     private lateinit var telephonyManager: TelephonyManager
     private lateinit var settingsViewModel: SettingsViewModel
+    private lateinit var locationManager: LocationManager
     private val serviceScope = CoroutineScope(Dispatchers.Default)
     private var loggingJob: Job? = null
     private val notifiedCells = mutableSetOf<String>()
@@ -109,6 +119,7 @@ class CellLoggingService : Service() {
         cellDatabase = CellDatabase.getInstance(applicationContext)
         telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
         settingsViewModel = SettingsViewModel(application)
+        locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -147,17 +158,19 @@ class CellLoggingService : Service() {
             val cellInfoList = withContext(Dispatchers.Default) {
                 telephonyManager.allCellInfo
             }
+            val location = getLastKnownLocation()
             cellInfoList.forEach { cellInfo ->
                 when (cellInfo) {
-                    is CellInfoNr -> logNrCell(cellInfo)
-                    is CellInfoLte -> logLteCell(cellInfo)
+                    is CellInfoNr -> logNrCell(cellInfo, location)
+                    is CellInfoLte -> logLteCell(cellInfo, location)
                 }
             }
         }
     }
 
-    private fun logNrCell(cellInfo: CellInfoNr) {
+    private fun logNrCell(cellInfo: CellInfoNr, location: Location?) {
         val cellIdentity = cellInfo.cellIdentity as? CellIdentityNr ?: return
+        val cellSignalStrength = cellInfo.cellSignalStrength as? CellSignalStrengthNr
         val cellId = cellIdentity.nci.toString()
         logCell(
             "NR",
@@ -170,12 +183,16 @@ class CellLoggingService : Service() {
             cellIdentity.tac.toString(),
             cellIdentity.mccString,
             cellIdentity.mncString,
-            cellIdentity.operatorAlphaLong?.toString()
+            cellIdentity.operatorAlphaLong?.toString(),
+            cellSignalStrength?.ssRsrp,
+            location?.latitude,
+            location?.longitude
         )
     }
 
-    private fun logLteCell(cellInfo: CellInfoLte) {
+    private fun logLteCell(cellInfo: CellInfoLte, location: Location?) {
         val cellIdentity = cellInfo.cellIdentity
+        val cellSignalStrength = cellInfo.cellSignalStrength
         val cellId = cellIdentity.ci.toString()
         logCell(
             "LTE",
@@ -188,7 +205,10 @@ class CellLoggingService : Service() {
             cellIdentity.tac.toString(),
             cellIdentity.mccString,
             cellIdentity.mncString,
-            cellIdentity.operatorAlphaLong?.toString()
+            cellIdentity.operatorAlphaLong?.toString(),
+            cellSignalStrength.rsrp,
+            location?.latitude,
+            location?.longitude
         )
     }
 
@@ -203,26 +223,81 @@ class CellLoggingService : Service() {
         tac: String?,
         mcc: String?,
         mnc: String?,
-        operator: String?
+        operator: String?,
+        rsrp: Int?,
+        latitude: Double?,
+        longitude: Double?
     ) {
-        val loggedCell = LoggedCell(
-            cellId,
-            type,
-            System.currentTimeMillis(),
-            enbId,
-            earfcn,
-            pci,
-            cellSector,
-            bandNumber,
-            tac,
-            mcc,
-            mnc,
-            operator
-        )
         serviceScope.launch(Dispatchers.IO) {
-            cellDatabase.cellDao().insert(loggedCell)
+            // Check if the cell already exists in the database
+            val existingCell = cellDatabase.cellDao().getCellById(cellId)
+
+            val loggedCell = if (existingCell == null) {
+                // If the cell doesn't exist, create a new LoggedCell with current values as best values
+                LoggedCell(
+                    cellId = cellId,
+                    type = type,
+                    timestamp = System.currentTimeMillis(),
+                    enbId = enbId,
+                    earfcn = earfcn,
+                    pci = pci,
+                    cellSector = cellSector,
+                    bandNumber = bandNumber,
+                    tac = tac,
+                    mcc = mcc,
+                    mnc = mnc,
+                    operator = operator,
+                    rsrp = rsrp,
+                    latitude = latitude,
+                    longitude = longitude,
+                    bestRsrp = rsrp,
+                    bestLatitude = latitude,
+                    bestLongitude = longitude
+                ).also { cellDatabase.cellDao().insert(it) }
+            } else {
+                // If the cell exists, update its current values
+                existingCell.timestamp = System.currentTimeMillis()
+                existingCell.rsrp = rsrp
+                existingCell.latitude = latitude
+                existingCell.longitude = longitude
+
+                // Update best RSRP if the current RSRP is better (or if best RSRP is null)
+                if (rsrp != null && (existingCell.bestRsrp == null || rsrp > existingCell.bestRsrp!!)) {
+                    existingCell.bestRsrp = rsrp
+                }
+
+                // Update best location if there was no previous best location
+                if (existingCell.bestLatitude == null && existingCell.bestLongitude == null && latitude != null && longitude != null) {
+                    existingCell.bestLatitude = latitude
+                    existingCell.bestLongitude = longitude
+                }
+
+                cellDatabase.cellDao().update(existingCell)
+                existingCell
+            }
+
             checkForNewCell(loggedCell)
         }
+    }
+
+    private fun getLastKnownLocation(): Location? {
+        if (ActivityCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return null
+        }
+
+        val providers = locationManager.getProviders(true)
+        var bestLocation: Location? = null
+        for (provider in providers) {
+            val location = locationManager.getLastKnownLocation(provider) ?: continue
+            if (bestLocation == null || location.accuracy < bestLocation.accuracy) {
+                bestLocation = location
+            }
+        }
+        return bestLocation
     }
 
     private fun checkForNewCell(loggedCell: LoggedCell) {
@@ -275,6 +350,12 @@ class CellLoggingService : Service() {
 interface CellDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     fun insert(cell: LoggedCell)
+
+    @Update
+    fun update(cell: LoggedCell)
+
+    @Query("SELECT * FROM logged_cells WHERE cellId = :cellId")
+    fun getCellById(cellId: String): LoggedCell?
 
     @Query("SELECT COUNT(*) FROM logged_cells WHERE cellId = :cellId")
     fun getCellCount(cellId: String): Int
