@@ -325,12 +325,27 @@ class CellLoggingService : Service() {
 
     private fun showNewCellNotification(loggedCell: LoggedCell) {
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+        // Create an intent to open the MainActivity on the Log page
+        val intent = Intent(this, MainActivity::class.java).apply {
+            action = MainActivity.ACTION_OPEN_LOG_PAGE
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("New Cell Detected")
             .setContentText("${loggedCell.type} cell with ID ${loggedCell.cellId}")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
+            .setContentIntent(pendingIntent)  // Set the PendingIntent
             .build()
 
         notificationManager.notify(NEW_CELL_NOTIFICATION_ID, notification)
@@ -803,6 +818,12 @@ class MainActivity : ComponentActivity() {
                     requestPermissions.launch(permissions)
                 }
 
+                LaunchedEffect(Unit) {
+                    if (intent?.action == ACTION_OPEN_LOG_PAGE) {
+                        currentPage = "Log"
+                    }
+                }
+
                 Scaffold(
                     modifier = Modifier.fillMaxSize(),
                     bottomBar = {
@@ -886,6 +907,10 @@ class MainActivity : ComponentActivity() {
         )
         val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         notificationManager.createNotificationChannel(channel)
+    }
+
+    companion object {
+        const val ACTION_OPEN_LOG_PAGE = "io.github.bubbajuice.cellinfo.ACTION_OPEN_LOG_PAGE"
     }
 
     private fun startCellLoggingService() {
