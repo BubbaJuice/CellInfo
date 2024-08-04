@@ -53,6 +53,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewModelScope
 import androidx.room.*
 import io.github.bubbajuice.cellinfo.ui.theme.MyApplicationTheme
@@ -234,6 +235,10 @@ class CellLoggingService : Service() {
         latitude: Double?,
         longitude: Double?
     ) {
+        if (cellId == "268435455" || cellId == "2147483647") {
+            return
+        }
+
         serviceScope.launch(Dispatchers.IO) {
             // Check if the cell already exists in the database
             val existingCell = cellDatabase.cellDao().getCellById(cellId)
@@ -256,7 +261,7 @@ class CellLoggingService : Service() {
                     rsrp = rsrp,
                     latitude = latitude,
                     longitude = longitude,
-                    bestRsrp = rsrp,
+                    bestRsrp = if (rsrp != -44) rsrp else null,
                     bestLatitude = latitude,
                     bestLongitude = longitude
                 ).also { cellDatabase.cellDao().insert(it) }
@@ -268,7 +273,7 @@ class CellLoggingService : Service() {
                 existingCell.longitude = longitude
 
                 // Update best RSRP if the current RSRP is better (or if best RSRP is null)
-                if (rsrp != null && (existingCell.bestRsrp == null || rsrp > existingCell.bestRsrp!!)) {
+                if (rsrp != null && rsrp != -44 && (existingCell.bestRsrp == null || rsrp > existingCell.bestRsrp!!)) {
                     existingCell.bestRsrp = rsrp
                 }
 
@@ -368,6 +373,12 @@ interface CellDao {
 
     @Query("SELECT * FROM logged_cells ORDER BY timestamp DESC")
     fun getAllCells(): Flow<List<LoggedCell>>
+
+    @Query("SELECT * FROM logged_cells WHERE bestRsrp = -44 OR cellId IN ('268435455', '2147483647')")
+    fun getCellsToCheck(): List<LoggedCell>
+
+    @Query("DELETE FROM logged_cells WHERE cellId IN ('268435455', '2147483647')")
+    fun deleteInvalidCells()
 }
 
 @Database(entities = [LoggedCell::class], version = 2, exportSchema = false)
@@ -775,6 +786,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         cellDatabase = CellDatabase.getInstance(applicationContext)
 
+        lifecycleScope.launch {
+            checkAndUpdateDatabase()
+        }
+
         createNotificationChannel()
         startCellLoggingService()
 
@@ -829,6 +844,26 @@ class MainActivity : ComponentActivity() {
                     })
                 }
             }
+        }
+    }
+
+    private suspend fun checkAndUpdateDatabase() {
+        withContext(Dispatchers.IO) {
+            val cellDao = cellDatabase.cellDao()
+            val cellsToCheck = cellDao.getCellsToCheck()
+
+            cellsToCheck.forEach { cell ->
+                if (cell.bestRsrp == -44) {
+                    // Reset bestLocation data and bestRsrp values
+                    cell.bestRsrp = null
+                    cell.bestLatitude = null
+                    cell.bestLongitude = null
+                    cellDao.update(cell)
+                }
+            }
+
+            // Delete invalid cells
+            cellDao.deleteInvalidCells()
         }
     }
 
@@ -1444,8 +1479,8 @@ fun formatCellInfoLte(
         "MCC" to (matchingLoggedCell?.mcc ?: cellIdentity.mccString ?: ""),
         "MNC" to (matchingLoggedCell?.mnc ?: cellIdentity.mncString ?: ""),
         "RSSI" to (cellSignalStrength.rssi.toString() + " dBm"),
-        "RSSNR" to "$rssnr dB",
-        "CQI" to "$cqi dB",
+        "RSSNR" to rssnr,
+        "CQI" to cqi,
         "Operator" to (matchingLoggedCell?.operator ?: cellIdentity.operatorAlphaLong?.toString() ?: ""),
         "Operator Abbreviation" to (cellIdentity.operatorAlphaShort?.toString() ?: ""),
         "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
@@ -1540,7 +1575,7 @@ fun formatCQI(cqi: Int): String{
     return if (cqi == 2147483647) {
         "n/a"
     } else {
-        "$cqi"
+        "$cqi + dB"
     }
 }
 
@@ -1553,10 +1588,10 @@ fun formatBandwidth(bandwidth: Int): String{
 }
 
 fun formatRSSNR(rssnr: Int): String{
-    return if (rssnr == 0) {
+    return if (rssnr == 0 || rssnr == 2147483647) {
         "n/a"
     } else {
-        "$rssnr"
+        "$rssnr dB"
     }
 }
 
