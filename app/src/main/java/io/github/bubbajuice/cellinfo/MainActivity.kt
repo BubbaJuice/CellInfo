@@ -7,6 +7,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -15,13 +16,16 @@ import android.location.Location
 import android.location.LocationManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.os.IBinder
+import android.provider.MediaStore
 import android.telephony.CellIdentityNr
 import android.telephony.CellInfo
 import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -340,8 +344,8 @@ class CellLoggingService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("New Cell Detected")
-            .setContentText("${loggedCell.type} cell with ID ${loggedCell.cellId}")
+            .setContentTitle("Cell Switched")
+            .setContentText("Switched to ${loggedCell.type} cell with ID ${loggedCell.cellId}")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
@@ -362,6 +366,7 @@ class CellLoggingService : Service() {
             .setContentText("Logging cells in the background")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setContentIntent(pendingIntent)
+            .setSilent(settingsViewModel.loggingServiceNotificationsEnabled.value)
             .build()
     }
 
@@ -496,6 +501,12 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _lteCompressedComponents = MutableStateFlow<List<CellComponent>>(emptyList())
     val lteCompressedComponents = _lteCompressedComponents.asStateFlow()
 
+    private val _newCellNotificationsEnabled = MutableStateFlow(true)
+    val newCellNotificationsEnabled = _newCellNotificationsEnabled.asStateFlow()
+
+    private val _loggingServiceNotificationsEnabled = MutableStateFlow(true)
+    val loggingServiceNotificationsEnabled = _loggingServiceNotificationsEnabled.asStateFlow()
+
     init {
         loadSettings()
     }
@@ -506,6 +517,22 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             _lteComponents.value = loadComponentList("LTE")
             _nrCompressedComponents.value = loadComponentList("NR_Compressed")
             _lteCompressedComponents.value = loadComponentList("LTE_Compressed")
+            _loggingServiceNotificationsEnabled.value = sharedPreferences.getBoolean("logging_service_notifications", false)
+            _newCellNotificationsEnabled.value = sharedPreferences.getBoolean("new_cell_notifications", true)
+        }
+    }
+
+    fun toggleNewCellNotifications(enabled: Boolean) {
+        viewModelScope.launch {
+            _newCellNotificationsEnabled.value = enabled
+            sharedPreferences.edit().putBoolean("new_cell_notifications", enabled).apply()
+        }
+    }
+
+    fun toggleLoggingServiceNotifications(enabled: Boolean) {
+        viewModelScope.launch {
+            _loggingServiceNotificationsEnabled.value = enabled
+            sharedPreferences.edit().putBoolean("logging_service_notifications", enabled).apply()
         }
     }
 
@@ -649,9 +676,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
 fun SettingsScreen(
     viewModel: SettingsViewModel,
     selectedTab: Int,
-    onTabSelected: (Int) -> Unit
+    onTabSelected: (Int) -> Unit,
+    onBackupDatabase: () -> Unit
 ) {
-    val tabs = listOf("NR Compressed", "NR", "LTE Compressed", "LTE")
+    val tabs = listOf("NR Compressed", "NR", "LTE Compressed", "LTE", "Notifications", "Backup")
 
     Column {
         TabRow(selectedTabIndex = selectedTab) {
@@ -690,7 +718,61 @@ fun SettingsScreen(
                     onToggleEnabled = { id -> viewModel.toggleComponentEnabled("LTE", id) },
                     onResetToDefault = { viewModel.resetToDefault("LTE") }
                 )
+                4 -> NotificationSettings(viewModel)
+                5 -> BackupSettings(onBackupDatabase)
             }
+        }
+    }
+}
+
+@Composable
+fun BackupSettings(onBackupDatabase: () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Button(onClick = onBackupDatabase) {
+            Text("Backup Database")
+        }
+    }
+}
+
+@Composable
+fun NotificationSettings(viewModel: SettingsViewModel) {
+    val newCellNotificationsEnabled by viewModel.newCellNotificationsEnabled.collectAsState()
+    val loggingServiceNotificationsEnabled by viewModel.loggingServiceNotificationsEnabled.collectAsState()
+
+    Column(modifier = Modifier.padding(16.dp)) {
+        Text("Notification Settings", style = MaterialTheme.typography.titleLarge)
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Silent Logging Service Notifications", style = MaterialTheme.typography.bodyLarge)
+            Switch(
+                checked = loggingServiceNotificationsEnabled,
+                onCheckedChange = { viewModel.toggleLoggingServiceNotifications(it) }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Cell Switched Notifications", style = MaterialTheme.typography.bodyLarge)
+            Switch(
+                checked = newCellNotificationsEnabled,
+                onCheckedChange = { viewModel.toggleNewCellNotifications(it) }
+            )
         }
     }
 }
@@ -852,7 +934,8 @@ class MainActivity : ComponentActivity() {
                             SettingsScreen(
                                 viewModel = settingsViewModel,
                                 selectedTab = selectedSettingsTab,
-                                onTabSelected = { selectedSettingsTab = it }
+                                onTabSelected = { selectedSettingsTab = it },
+                                onBackupDatabase = { exportDatabaseToJson() }
                             )
                         }
                     }
@@ -933,6 +1016,40 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showPermissionDeniedDialog() {
+    }
+
+    private fun exportDatabaseToJson() {
+        lifecycleScope.launch(Dispatchers.IO) {
+            val cells = cellDatabase.cellDao().getAllCells().first()
+            val csvData = StringBuilder()
+
+            // Add CSV header
+            csvData.append("type,timestamp,enbId,earfcn,pci,cellSector,bandNumber,tac,mcc,mnc,operator,rsrp,latitude,longitude,bestRsrp,bestLatitude,bestLongitude\n")
+
+            // Add data rows
+            for (cell in cells) {
+                csvData.append("${cell.type},${cell.timestamp},${cell.enbId},${cell.earfcn},${cell.pci},${cell.cellSector},${cell.bandNumber},${cell.tac},${cell.mcc},${cell.mnc},${cell.operator},${cell.rsrp},${cell.latitude},${cell.longitude},${cell.bestRsrp},${cell.bestLatitude},${cell.bestLongitude}\n")
+            }
+
+            val fileName = "cell_database_backup_${System.currentTimeMillis()}.csv"
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/csv")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+            }
+
+            val resolver = applicationContext.contentResolver
+            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+
+            uri?.let {
+                resolver.openOutputStream(it)?.use { outputStream ->
+                    outputStream.write(csvData.toString().toByteArray())
+                }
+                runOnUiThread {
+                    Toast.makeText(applicationContext, "Database exported to Downloads folder as CSV", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 }
 
