@@ -1083,7 +1083,7 @@ class MainActivity : ComponentActivity() {
                             cellDatabase.cellDao().clearAll() // Clear existing data
                             reader.forEachLine { line ->
                                 val values = line.split(",")
-                                // Log.d("values.size", values.size.toString())
+                                Log.d("values.size", values.size.toString())
                                 if (values.size == 19) {
                                     val cell = LoggedCell(
                                         cellId = values[0],
@@ -1107,7 +1107,30 @@ class MainActivity : ComponentActivity() {
                                         seen = values[18].toBoolean()
                                     )
                                     cellDatabase.cellDao().insert(cell)
-                                    // Log.d("Restore", "Restored Cell: $cell")
+                                    Log.d("Restore", "Restored Cell: $cell")
+                                } else if (values.size == 18) {
+                                    val cell = LoggedCell(
+                                        cellId = values[0],
+                                        type = values[1],
+                                        timestamp = values[2].toLongOrNull() ?: 0L,
+                                        enbId = values[3],
+                                        earfcn = values[4],
+                                        pci = values[5],
+                                        cellSector = values[6],
+                                        bandNumber = values[7],
+                                        tac = values[8],
+                                        mcc = values[9],
+                                        mnc = values[10],
+                                        operator = values[11],
+                                        rsrp = values[12].toIntOrNull(),
+                                        latitude = values[13].toDoubleOrNull(),
+                                        longitude = values[14].toDoubleOrNull(),
+                                        bestRsrp = values[15].toIntOrNull(),
+                                        bestLatitude = values[16].toDoubleOrNull(),
+                                        bestLongitude = values[17].toDoubleOrNull()
+                                    )
+                                    cellDatabase.cellDao().insert(cell)
+                                    Log.d("Restore", "Restored Cell: $cell")
                                 } else {
                                     Toast.makeText(applicationContext, "Error restoring database: Invalid/old database csv", Toast.LENGTH_LONG).show()
                                 }
