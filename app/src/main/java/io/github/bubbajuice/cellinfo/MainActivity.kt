@@ -25,6 +25,7 @@ import android.telephony.CellInfoLte
 import android.telephony.CellInfoNr
 import android.telephony.CellSignalStrengthNr
 import android.telephony.TelephonyManager
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -106,7 +107,8 @@ data class LoggedCell(
     var longitude: Double?,
     var bestRsrp: Int?,
     var bestLatitude: Double?,
-    var bestLongitude: Double?
+    var bestLongitude: Double?,
+    var seen: Boolean = false
 )
 
 class CellLoggingService : Service() {
@@ -116,7 +118,6 @@ class CellLoggingService : Service() {
     private lateinit var locationManager: LocationManager
     private val serviceScope = CoroutineScope(Dispatchers.Default)
     private var loggingJob: Job? = null
-    private val notifiedCells = mutableSetOf<String>()
 
     // Don't delete save for feature to clear database
     private fun clearDatabase() {
@@ -317,12 +318,11 @@ class CellLoggingService : Service() {
 
     private fun checkForNewCell(loggedCell: LoggedCell) {
         serviceScope.launch(Dispatchers.IO) {
-            val isNewCell = cellDatabase.cellDao().getCellCount(loggedCell.cellId) == 1
-            if (isNewCell && !notifiedCells.contains(loggedCell.cellId)) {
+            if (!loggedCell.seen) {
                 withContext(Dispatchers.Main) {
                     showNewCellNotification(loggedCell)
                 }
-                notifiedCells.add(loggedCell.cellId)
+                cellDatabase.cellDao().updateCellSeen(loggedCell.cellId, true)
             }
         }
     }
@@ -344,8 +344,8 @@ class CellLoggingService : Service() {
         )
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Cell Switched")
-            .setContentText("Switched to ${loggedCell.type} cell with ID ${loggedCell.cellId}")
+            .setContentTitle("New Cell")
+            .setContentText("New ${loggedCell.type} cell with ID ${loggedCell.cellId}")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
@@ -388,6 +388,9 @@ interface CellDao {
     @Query("SELECT * FROM logged_cells WHERE cellId = :cellId")
     fun getCellById(cellId: String): LoggedCell?
 
+    @Query("UPDATE logged_cells SET seen = :seen WHERE cellId = :cellId")
+    fun updateCellSeen(cellId: String, seen: Boolean)
+
     @Query("SELECT COUNT(*) FROM logged_cells WHERE cellId = :cellId")
     fun getCellCount(cellId: String): Int
 
@@ -399,6 +402,9 @@ interface CellDao {
 
     @Query("DELETE FROM logged_cells WHERE cellId IN ('268435455', '2147483647')")
     fun deleteInvalidCells()
+
+    @Query("DELETE FROM logged_cells")
+    fun clearAll()
 }
 
 @Database(entities = [LoggedCell::class], version = 2, exportSchema = false)
@@ -677,7 +683,8 @@ fun SettingsScreen(
     viewModel: SettingsViewModel,
     selectedTab: Int,
     onTabSelected: (Int) -> Unit,
-    onBackupDatabase: () -> Unit
+    onBackupDatabase: () -> Unit,
+    onRestoreDatabase: () -> Unit
 ) {
     val tabs = listOf("NR Compressed", "NR", "LTE Compressed", "LTE", "Notifications", "Backup")
 
@@ -719,14 +726,14 @@ fun SettingsScreen(
                     onResetToDefault = { viewModel.resetToDefault("LTE") }
                 )
                 4 -> NotificationSettings(viewModel)
-                5 -> BackupSettings(onBackupDatabase)
+                5 -> BackupSettings(onBackupDatabase, onRestoreDatabase)
             }
         }
     }
 }
 
 @Composable
-fun BackupSettings(onBackupDatabase: () -> Unit) {
+fun BackupSettings(onBackupDatabase: () -> Unit, onRestoreDatabase: () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -736,6 +743,10 @@ fun BackupSettings(onBackupDatabase: () -> Unit) {
     ) {
         Button(onClick = onBackupDatabase) {
             Text("Backup Database")
+        }
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(onClick = onRestoreDatabase) {
+            Text("Restore Database")
         }
     }
 }
@@ -768,7 +779,7 @@ fun NotificationSettings(viewModel: SettingsViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Cell Switched Notifications", style = MaterialTheme.typography.bodyLarge)
+            Text("New Cell Notifications", style = MaterialTheme.typography.bodyLarge)
             Switch(
                 checked = newCellNotificationsEnabled,
                 onCheckedChange = { viewModel.toggleNewCellNotifications(it) }
@@ -935,7 +946,8 @@ class MainActivity : ComponentActivity() {
                                 viewModel = settingsViewModel,
                                 selectedTab = selectedSettingsTab,
                                 onTabSelected = { selectedSettingsTab = it },
-                                onBackupDatabase = { exportDatabaseToJson() }
+                                onBackupDatabase = { exportDatabaseToJson() },
+                                onRestoreDatabase = { restoreDatabaseFromCsv() }
                             )
                         }
                     }
@@ -1024,11 +1036,11 @@ class MainActivity : ComponentActivity() {
             val csvData = StringBuilder()
 
             // Add CSV header
-            csvData.append("type,timestamp,enbId,earfcn,pci,cellSector,bandNumber,tac,mcc,mnc,operator,rsrp,latitude,longitude,bestRsrp,bestLatitude,bestLongitude\n")
+            csvData.append("cellId,type,timestamp,enbId,earfcn,pci,cellSector,bandNumber,tac,mcc,mnc,operator,rsrp,latitude,longitude,bestRsrp,bestLatitude,bestLongitude,seen\n")
 
             // Add data rows
             for (cell in cells) {
-                csvData.append("${cell.type},${cell.timestamp},${cell.enbId},${cell.earfcn},${cell.pci},${cell.cellSector},${cell.bandNumber},${cell.tac},${cell.mcc},${cell.mnc},${cell.operator},${cell.rsrp},${cell.latitude},${cell.longitude},${cell.bestRsrp},${cell.bestLatitude},${cell.bestLongitude}\n")
+                csvData.append("${cell.cellId},${cell.type},${cell.timestamp},${cell.enbId},${cell.earfcn},${cell.pci},${cell.cellSector},${cell.bandNumber},${cell.tac},${cell.mcc},${cell.mnc},${cell.operator},${cell.rsrp},${cell.latitude},${cell.longitude},${cell.bestRsrp},${cell.bestLatitude},${cell.bestLongitude},${cell.seen}\n")
             }
 
             val fileName = "cell_database_backup_${System.currentTimeMillis()}.csv"
@@ -1047,6 +1059,68 @@ class MainActivity : ComponentActivity() {
                 }
                 runOnUiThread {
                     Toast.makeText(applicationContext, "Database exported to Downloads folder as CSV", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
+
+    private fun restoreDatabaseFromCsv() {
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "text/*"
+        }
+        restoreLauncher.launch(intent)
+    }
+
+    private val restoreLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        if (result.resultCode == RESULT_OK) {
+            result.data?.data?.let { uri ->
+                lifecycleScope.launch(Dispatchers.IO) {
+                    try {
+                        contentResolver.openInputStream(uri)?.use { inputStream ->
+                            val reader = inputStream.bufferedReader()
+                            reader.readLine()
+                            cellDatabase.cellDao().clearAll() // Clear existing data
+                            reader.forEachLine { line ->
+                                val values = line.split(",")
+                                // Log.d("values.size", values.size.toString())
+                                if (values.size == 19) {
+                                    val cell = LoggedCell(
+                                        cellId = values[0],
+                                        type = values[1],
+                                        timestamp = values[2].toLongOrNull() ?: 0L,
+                                        enbId = values[3],
+                                        earfcn = values[4],
+                                        pci = values[5],
+                                        cellSector = values[6],
+                                        bandNumber = values[7],
+                                        tac = values[8],
+                                        mcc = values[9],
+                                        mnc = values[10],
+                                        operator = values[11],
+                                        rsrp = values[12].toIntOrNull(),
+                                        latitude = values[13].toDoubleOrNull(),
+                                        longitude = values[14].toDoubleOrNull(),
+                                        bestRsrp = values[15].toIntOrNull(),
+                                        bestLatitude = values[16].toDoubleOrNull(),
+                                        bestLongitude = values[17].toDoubleOrNull(),
+                                        seen = values[18].toBoolean()
+                                    )
+                                    cellDatabase.cellDao().insert(cell)
+                                    // Log.d("Restore", "Restored Cell: $cell")
+                                } else {
+                                    Toast.makeText(applicationContext, "Error restoring database: Invalid/old database csv", Toast.LENGTH_LONG).show()
+                                }
+                            }
+                        }
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(applicationContext, "Database restored successfully", Toast.LENGTH_LONG).show()
+                        }
+                    } catch (e: Exception) {
+                        withContext(Dispatchers.Main) {
+                            Toast.makeText(applicationContext, "Error restoring database: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
                 }
             }
         }
