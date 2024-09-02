@@ -31,6 +31,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -173,7 +174,6 @@ class CellLoggingService : Service() {
             val location = getLastKnownLocation()
             cellInfoList.forEach { cellInfo ->
                 when (cellInfo) {
-                    is CellInfoNr -> logNrCell(cellInfo, location)
                     is CellInfoLte -> logLteCell(cellInfo, location)
                 }
             }
@@ -181,25 +181,6 @@ class CellLoggingService : Service() {
     }
 
     private fun logNrCell(cellInfo: CellInfoNr, location: Location?) {
-        val cellIdentity = cellInfo.cellIdentity as? CellIdentityNr ?: return
-        val cellSignalStrength = cellInfo.cellSignalStrength as? CellSignalStrengthNr
-        val cellId = cellIdentity.nci.toString()
-        logCell(
-            "NR",
-            cellId,
-            null, // eNB ID not applicable for NR
-            cellIdentity.nrarfcn.toString(),
-            cellIdentity.pci.toString(),
-            null, // Cell sector not applicable for NR
-            getNrBandFromArfcn(cellIdentity.nrarfcn).toString(),
-            cellIdentity.tac.toString(),
-            cellIdentity.mccString,
-            cellIdentity.mncString,
-            cellIdentity.operatorAlphaLong?.toString(),
-            cellSignalStrength?.ssRsrp,
-            location?.latitude,
-            location?.longitude
-        )
     }
 
     private fun logLteCell(cellInfo: CellInfoLte, location: Location?) {
@@ -890,6 +871,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    @RequiresApi(Build.VERSION_CODES.Q)
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         cellDatabase = CellDatabase.getInstance(applicationContext)
@@ -1047,11 +1029,16 @@ class MainActivity : ComponentActivity() {
             val contentValues = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
                 put(MediaStore.MediaColumns.MIME_TYPE, "text/csv")
-                put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
+                val downloadsDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                put(MediaStore.MediaColumns.DATA, "${downloadsDir.absolutePath}/$fileName")
             }
 
             val resolver = applicationContext.contentResolver
-            val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
+            } else {
+                resolver.insert(MediaStore.Files.getContentUri("external"), contentValues)
+            }
 
             uri?.let {
                 resolver.openOutputStream(it)?.use { outputStream ->
@@ -1239,7 +1226,6 @@ fun CellInfoScreen(context: Context, viewModel: SettingsViewModel, cellDatabase:
                 cellInfoList = telephonyManager.allCellInfo
                     .sortedByDescending {
                         when (it) {
-                            is CellInfoNr -> 1
                             is CellInfoLte -> 0
                             else -> -1
                         }
@@ -1339,7 +1325,6 @@ fun CellInfoList(
 ) {
     val groupedCells = cellInfoList.groupBy {
         when (it) {
-            is CellInfoNr -> "5G"
             is CellInfoLte -> "LTE"
             else -> "Other"
         }
@@ -1439,7 +1424,6 @@ fun ExpandableSection(
 
 fun getCellId(cellInfo: CellInfo): Any {
     return when (cellInfo) {
-        is CellInfoNr -> cellInfo.toString()
         is CellInfoLte -> "${cellInfo.cellIdentity.ci}-${cellInfo.cellIdentity.earfcn}-${cellInfo.cellIdentity.pci}"
         else -> cellInfo.hashCode()
     }
@@ -1460,7 +1444,6 @@ fun CellInfoItem(
     var showDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val cellInfoRows = when (cellInfo) {
-        is CellInfoNr -> formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents)
         is CellInfoLte -> formatCellInfoLte(
             cellInfo,
             if (isExpanded) lteComponents else lteCompressedComponents,
@@ -1573,25 +1556,7 @@ fun getExplanation(label: String): String {
     }
 }
 
-fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>): List<Pair<String, String>> {
-    val cellIdentity = cellInfoNr.cellIdentity as CellIdentityNr
-    val cellSignalStrength = cellInfoNr.cellSignalStrength
-
-    val band = getNrBandFromArfcn(cellIdentity.nrarfcn)
-
-    val allComponents = listOf(
-        "ssRSRP" to (cellSignalStrength.dbm.toString() + " dBm"),
-        "ARFCN" to cellIdentity.nrarfcn.toString(),
-        "Band Number" to "n$band",
-        "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
-    )
-
-    return components
-        .filter { it.enabled }
-        .sortedBy { it.order }
-        .mapNotNull { component ->
-            allComponents.find { it.first == component.id }?.let { it.first to it.second }
-        }
+fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>) {
 }
 
 fun getNrBandFromArfcn(arfcn: Int): Int {
@@ -1717,7 +1682,6 @@ fun formatCellInfoLte(
         "TAC" to (matchingLoggedCell?.tac ?: cellIdentity.tac.toString()),
         "MCC" to (matchingLoggedCell?.mcc ?: cellIdentity.mccString ?: ""),
         "MNC" to (matchingLoggedCell?.mnc ?: cellIdentity.mncString ?: ""),
-        "RSSI" to (cellSignalStrength.rssi.toString() + " dBm"),
         "RSSNR" to rssnr,
         "CQI" to cqi,
         "Operator" to (matchingLoggedCell?.operator ?: cellIdentity.operatorAlphaLong?.toString() ?: ""),
