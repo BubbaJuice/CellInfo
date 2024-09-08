@@ -513,6 +513,9 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private val _loggingServiceNotificationsEnabled = MutableStateFlow(true)
     val loggingServiceNotificationsEnabled = _loggingServiceNotificationsEnabled.asStateFlow()
 
+    private val _closeAppNotificationEnabled = MutableStateFlow(false)
+    val closeAppNotificationEnabled = _closeAppNotificationEnabled.asStateFlow()
+
     init {
         loadSettings()
     }
@@ -525,6 +528,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             _lteCompressedComponents.value = loadComponentList("LTE_Compressed")
             _loggingServiceNotificationsEnabled.value = sharedPreferences.getBoolean("logging_service_notifications", false)
             _newCellNotificationsEnabled.value = sharedPreferences.getBoolean("new_cell_notifications", true)
+            _closeAppNotificationEnabled.value = sharedPreferences.getBoolean("close_app_notification", false)
         }
     }
 
@@ -539,6 +543,13 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             _loggingServiceNotificationsEnabled.value = enabled
             sharedPreferences.edit().putBoolean("logging_service_notifications", enabled).apply()
+        }
+    }
+
+    fun toggleCloseAppNotification(enabled: Boolean) {
+        viewModelScope.launch {
+            _closeAppNotificationEnabled.value = enabled
+            sharedPreferences.edit().putBoolean("close_app_notification", enabled).apply()
         }
     }
 
@@ -569,7 +580,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             "NR_Compressed" -> listOf(
                 CellComponent("ssRSRP", "ssRSRP", true, 0),
                 CellComponent("ARFCN", "ARFCN", true, 1),
-                CellComponent("Band", "Band", true, 2),
+                CellComponent("Band Number", "Band Number", true, 2),
                 CellComponent("Data", "Data", false, 3)
                 // Add more NR compressed components as needed
             )
@@ -577,7 +588,7 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
             "NR" -> listOf(
                 CellComponent("ssRSRP", "ssRSRP", true, 0),
                 CellComponent("ARFCN", "ARFCN", true, 1),
-                CellComponent("Band", "Band", true, 2),
+                CellComponent("Band Number", "Band Number", true, 2),
                 CellComponent("Data", "Data", false, 3)
                 // Add more NR components as needed
             )
@@ -755,6 +766,7 @@ fun BackupSettings(onBackupDatabase: () -> Unit, onRestoreDatabase: () -> Unit) 
 fun NotificationSettings(viewModel: SettingsViewModel) {
     val newCellNotificationsEnabled by viewModel.newCellNotificationsEnabled.collectAsState()
     val loggingServiceNotificationsEnabled by viewModel.loggingServiceNotificationsEnabled.collectAsState()
+    val closeAppNotificationEnabled by viewModel.closeAppNotificationEnabled.collectAsState()
 
     Column(modifier = Modifier.padding(16.dp)) {
         Text("Notification Settings", style = MaterialTheme.typography.titleLarge)
@@ -783,6 +795,18 @@ fun NotificationSettings(viewModel: SettingsViewModel) {
             Switch(
                 checked = newCellNotificationsEnabled,
                 onCheckedChange = { viewModel.toggleNewCellNotifications(it) }
+            )
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text("Notification on App Close", style = MaterialTheme.typography.bodyLarge)
+            Switch(
+                checked = closeAppNotificationEnabled,
+                onCheckedChange = { viewModel.toggleCloseAppNotification(it) }
             )
         }
     }
@@ -963,6 +987,27 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun showAppClosedNotification() {
+        if (settingsViewModel.closeAppNotificationEnabled.value) {
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            val notification = NotificationCompat.Builder(this, CellLoggingService.CHANNEL_ID)
+                .setContentTitle("Cell Info App Closed")
+                .setContentText("The Cell Info app has been closed.")
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setAutoCancel(true)
+                .build()
+
+            notificationManager.notify(APP_CLOSED_NOTIFICATION_ID, notification)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        showAppClosedNotification()
+    }
+
     private suspend fun checkAndUpdateDatabase() {
         withContext(Dispatchers.IO) {
             val cellDao = cellDatabase.cellDao()
@@ -1006,6 +1051,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_OPEN_LOG_PAGE = "io.github.bubbajuice.cellinfo.ACTION_OPEN_LOG_PAGE"
+        private const val APP_CLOSED_NOTIFICATION_ID = 3
     }
 
     private fun startCellLoggingService() {
