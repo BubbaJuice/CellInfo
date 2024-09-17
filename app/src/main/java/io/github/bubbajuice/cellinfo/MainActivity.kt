@@ -777,7 +777,7 @@ fun NotificationSettings(viewModel: SettingsViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Silent Logging Service Notifications", style = MaterialTheme.typography.bodyLarge)
+            Text("Silence \"Logging Service\" notifications", style = MaterialTheme.typography.bodyLarge)
             Switch(
                 checked = loggingServiceNotificationsEnabled,
                 onCheckedChange = { viewModel.toggleLoggingServiceNotifications(it) }
@@ -791,19 +791,21 @@ fun NotificationSettings(viewModel: SettingsViewModel) {
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("New Cell Notifications", style = MaterialTheme.typography.bodyLarge)
+            Text("\"New Cell\" notifications", style = MaterialTheme.typography.bodyLarge)
             Switch(
                 checked = newCellNotificationsEnabled,
                 onCheckedChange = { viewModel.toggleNewCellNotifications(it) }
             )
         }
 
+        Spacer(modifier = Modifier.height(16.dp))
+
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text("Notification on App Close", style = MaterialTheme.typography.bodyLarge)
+            Text("Notifications for when app closes", style = MaterialTheme.typography.bodyLarge)
             Switch(
                 checked = closeAppNotificationEnabled,
                 onCheckedChange = { viewModel.toggleCloseAppNotification(it) }
@@ -918,6 +920,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         cellDatabase = CellDatabase.getInstance(applicationContext)
 
+        handleIntent(intent)
         lifecycleScope.launch {
             checkAndUpdateDatabase()
         }
@@ -987,9 +990,37 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun handleIntent(intent: Intent?) {
+        when (intent?.action) {
+            ACTION_OPEN_LOG_PAGE -> {
+                // Existing code to open log page
+            }
+            ACTION_OPEN_FROM_NOTIFICATION -> {
+                cancelAppClosedNotification()
+            }
+        }
+    }
+
+    private fun cancelAppClosedNotification() {
+        val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        notificationManager.cancel(APP_CLOSED_NOTIFICATION_ID)
+    }
+
     private fun showAppClosedNotification() {
         if (settingsViewModel.closeAppNotificationEnabled.value) {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+
+            val intent = Intent(this, MainActivity::class.java).apply {
+                action = ACTION_OPEN_FROM_NOTIFICATION
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+            }
+
+            val pendingIntent = PendingIntent.getActivity(
+                this,
+                0,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
 
             val notification = NotificationCompat.Builder(this, CellLoggingService.CHANNEL_ID)
                 .setContentTitle("Cell Info App Closed")
@@ -997,6 +1028,7 @@ class MainActivity : ComponentActivity() {
                 .setSmallIcon(R.drawable.ic_launcher_foreground)
                 .setPriority(NotificationCompat.PRIORITY_DEFAULT)
                 .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
                 .build()
 
             notificationManager.notify(APP_CLOSED_NOTIFICATION_ID, notification)
@@ -1051,6 +1083,7 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val ACTION_OPEN_LOG_PAGE = "io.github.bubbajuice.cellinfo.ACTION_OPEN_LOG_PAGE"
+        const val ACTION_OPEN_FROM_NOTIFICATION = "io.github.bubbajuice.cellinfo.ACTION_OPEN_FROM_NOTIFICATION"
         private const val APP_CLOSED_NOTIFICATION_ID = 3
     }
 
