@@ -1,6 +1,7 @@
 package io.github.bubbajuice.cellinfo
 
 import android.Manifest
+import android.Manifest.permission.ACCESS_BACKGROUND_LOCATION
 import android.app.Application
 import android.app.Notification
 import android.app.NotificationChannel
@@ -31,6 +32,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
+import androidx.annotation.RequiresApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -901,18 +903,29 @@ fun ComponentList(
 class MainActivity : ComponentActivity() {
     private val settingsViewModel: SettingsViewModel by viewModels()
     private lateinit var cellDatabase: CellDatabase
-    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+    private val permissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
         arrayOf(
             Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.ACCESS_FINE_LOCATION,
             Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.POST_NOTIFICATIONS
+            Manifest.permission.POST_NOTIFICATIONS,
+            Manifest.permission.FOREGROUND_SERVICE_LOCATION,
+            ACCESS_BACKGROUND_LOCATION
+        )
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU)  {
+        arrayOf(
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.POST_NOTIFICATIONS,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            ACCESS_BACKGROUND_LOCATION
         )
     } else {
         arrayOf(
             Manifest.permission.READ_PHONE_STATE,
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            ACCESS_BACKGROUND_LOCATION
         )
     }
 
