@@ -463,8 +463,8 @@ fun LoggedCellItem(cell: LoggedCell) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(8.dp),
-        elevation = CardDefaults.cardElevation(4.dp)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        elevation = CardDefaults.cardElevation(8.dp)
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text("${cell.type} Cell", style = MaterialTheme.typography.titleMedium)
@@ -583,7 +583,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 CellComponent("ssRSRP", "ssRSRP", true, 0),
                 CellComponent("ARFCN", "ARFCN", true, 1),
                 CellComponent("Band Number", "Band Number", true, 2),
-                CellComponent("Data", "Data", false, 3)
+                CellComponent("PCI", "PCI", true, 3),
+                CellComponent("Data", "Data", false, 4)
                 // Add more NR compressed components as needed
             )
 
@@ -591,7 +592,8 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 CellComponent("ssRSRP", "ssRSRP", true, 0),
                 CellComponent("ARFCN", "ARFCN", true, 1),
                 CellComponent("Band Number", "Band Number", true, 2),
-                CellComponent("Data", "Data", false, 3)
+                CellComponent("PCI", "PCI", true, 3),
+                CellComponent("Data", "Data", false, 4)
                 // Add more NR components as needed
             )
 
@@ -1645,7 +1647,7 @@ fun getExplanation(label: String): String {
         "Band Number" -> "Bands are frequency bands or channels at which carries use."
         "Band Name" -> "The commonly used name of a band number."
         "TAC" -> "The Tracking Area Code is a code given based on where a cell site is located."
-        "EARFCN" -> "The E-UTRA Absolute Radio Frequency Channel Number is a number that provides the frequency, bandwidth, and duplex mode of the connected channel."
+        "EARFCN (Downlink)" -> "The E-UTRA Absolute Radio Frequency Channel Number is a number that provides the frequency, bandwidth, and duplex mode of the connected channel."
         "Bandwidth" -> "The bandwidth is how wide a frequency band is."
         "MCC" -> "The Mobile County Code is a code that each county has that identifies which county a cell site is located in."
         "MNC" -> "The Mobile Network Code is a code that identifies which operator is broadcasting from a cell."
@@ -1675,6 +1677,7 @@ fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>): L
         "ssRSRP" to (cellSignalStrength.dbm.toString() + " dBm"),
         "ARFCN" to cellIdentity.nrarfcn.toString(),
         "Band Number" to "n$band",
+        "PCI" to cellIdentity.pci.toString(),
         "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
     )
 
@@ -1804,7 +1807,7 @@ fun formatCellInfoLte(
         "Timing Advance" to timingAdvance,
         "Cell ID" to cellid,
         "PCI" to cellIdentity.pci.toString(),
-        "EARFCN" to cellIdentity.earfcn.toString(),
+        "EARFCN (Downlink)" to cellIdentity.earfcn.toString(),
         "Bandwidth" to bandwidth,
         "TAC" to (matchingLoggedCell?.tac ?: cellIdentity.tac.toString()),
         "MCC" to (matchingLoggedCell?.mcc ?: cellIdentity.mccString ?: ""),
