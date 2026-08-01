@@ -32,7 +32,6 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.annotation.RequiresApi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -173,6 +172,7 @@ class CellLoggingService : Service() {
                 telephonyManager.allCellInfo
             }
             val location = getLastKnownLocation()
+
             cellInfoList.forEach { cellInfo ->
                 when (cellInfo) {
                     is CellInfoNr -> logNrCell(cellInfo, location)
@@ -185,14 +185,19 @@ class CellLoggingService : Service() {
     private fun logNrCell(cellInfo: CellInfoNr, location: Location?) {
         val cellIdentity = cellInfo.cellIdentity as? CellIdentityNr ?: return
         val cellSignalStrength = cellInfo.cellSignalStrength as? CellSignalStrengthNr
-        val cellId = cellIdentity.nci.toString()
+        val cellId = cellIdentity.getNci().toString()
+        val nrGnbBits = getNrGnbBitLength(cellIdentity.mccString, cellIdentity.mncString)
+        val gnbId = calculateNrGnbId(cellIdentity.getNci(), nrGnbBits)
+        val sectorId = calculateNrSectorId(cellIdentity.getNci(), nrGnbBits)
+        val type = "NR"
+
         logCell(
-            "NR",
+            type,
             cellId,
-            null, // eNB ID not applicable for NR
+            gnbId,
             cellIdentity.nrarfcn.toString(),
             cellIdentity.pci.toString(),
-            null, // Cell sector not applicable for NR
+            sectorId,
             getNrBandFromArfcn(cellIdentity.nrarfcn).toString(),
             cellIdentity.tac.toString(),
             cellIdentity.mccString,
@@ -470,7 +475,7 @@ fun LoggedCellItem(cell: LoggedCell) {
             Text("${cell.type} Cell", style = MaterialTheme.typography.titleMedium)
             Text("Cell ID: ${cell.cellId}", style = MaterialTheme.typography.bodyMedium)
             Text("eNB ID: ${cell.enbId ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
-            Text("EARFCN: ${cell.earfcn ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
+            Text("EARFCN (Downlink): ${cell.earfcn ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
             Text("PCI: ${cell.pci ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
             Text("Cell Sector: ${cell.cellSector ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
             Text("Band Number: ${cell.bandNumber ?: "N/A"}", style = MaterialTheme.typography.bodyMedium)
@@ -580,20 +585,38 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
     private fun getDefaultComponentList(key: String): List<CellComponent> {
         return when (key) {
             "NR_Compressed" -> listOf(
-                CellComponent("ssRSRP", "ssRSRP", true, 0),
-                CellComponent("ARFCN", "ARFCN", true, 1),
-                CellComponent("Band Number", "Band Number", true, 2),
-                CellComponent("PCI", "PCI", true, 3),
-                CellComponent("Data", "Data", false, 4)
+                CellComponent("gNB", "gNB", true, 0),
+                CellComponent("Cell Sector ID", "Cell Sector ID", true, 1),
+                CellComponent("ssRSRP", "ssRSRP", true, 2),
+                CellComponent("ssRSRQ", "ssRSRQ", true, 3),
+                CellComponent("Band Number", "Band Number", true, 4),
+                CellComponent("PCI", "PCI", true, 5),
+                CellComponent("NCI", "NCI", false, 6),
+                CellComponent("ARFCN", "ARFCN", false, 7),
+                CellComponent("MCC", "MCC", false, 8),
+                CellComponent("MNC", "MNC", false, 9),
+                CellComponent("ssSINR", "ssSINR", false, 10),
+                CellComponent("Operator", "Operator", false, 11),
+                CellComponent("Operator Abbreviation", "Operator Abbreviation", false, 12),
+                CellComponent("Data", "Data", false, 13)
                 // Add more NR compressed components as needed
             )
 
             "NR" -> listOf(
-                CellComponent("ssRSRP", "ssRSRP", true, 0),
-                CellComponent("ARFCN", "ARFCN", true, 1),
-                CellComponent("Band Number", "Band Number", true, 2),
-                CellComponent("PCI", "PCI", true, 3),
-                CellComponent("Data", "Data", false, 4)
+                CellComponent("gNB", "gNB", true, 0),
+                CellComponent("Cell Sector ID", "Cell Sector ID", true, 1),
+                CellComponent("ssRSRP", "ssRSRP", true, 2),
+                CellComponent("ssRSRQ", "ssRSRQ", true, 3),
+                CellComponent("Band Number", "Band Number", true, 4),
+                CellComponent("PCI", "PCI", true, 5),
+                CellComponent("NCI", "NCI", true, 6),
+                CellComponent("ARFCN", "ARFCN", true, 7),
+                CellComponent("MCC", "MCC", true, 8),
+                CellComponent("MNC", "MNC", true, 9),
+                CellComponent("ssSINR", "ssSINR", true, 10),
+                CellComponent("Operator", "Operator", true, 11),
+                CellComponent("Operator Abbreviation", "Operator Abbreviation", true, 12),
+                CellComponent("Data", "Data", false, 13)
                 // Add more NR components as needed
             )
 
@@ -603,10 +626,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 CellComponent("Band Number", "Band Number", true, 2),
                 CellComponent("RSRP", "RSRP", true, 3),
                 CellComponent("RSRQ", "RSRQ", true, 4),
-                CellComponent("Timing Advance", "Timing Advance", false, 5),
-                CellComponent("Cell ID", "Cell ID", false, 6),
-                CellComponent("PCI", "PCI", false, 7),
-                CellComponent("EARFCN", "EARFCN", false, 8),
+                CellComponent("PCI", "PCI", true, 5),
+                CellComponent("Timing Advance", "Timing Advance", false, 6),
+                CellComponent("Cell ID", "Cell ID", false, 7),
+                CellComponent("EARFCN (Downlink)", "EARFCN (Downlink)", false, 8),
                 CellComponent("Bandwidth", "Bandwidth", false, 9),
                 CellComponent("TAC", "TAC", false, 10),
                 CellComponent("MCC", "MCC", false, 11),
@@ -626,10 +649,10 @@ class SettingsViewModel(application: Application) : AndroidViewModel(application
                 CellComponent("Band Number", "Band Number", true, 2),
                 CellComponent("RSRP", "RSRP", true, 3),
                 CellComponent("RSRQ", "RSRQ", true, 4),
-                CellComponent("Timing Advance", "Timing Advance", true, 5),
-                CellComponent("Cell ID", "Cell ID", true, 6),
-                CellComponent("PCI", "PCI", true, 7),
-                CellComponent("EARFCN", "EARFCN", true, 8),
+                CellComponent("PCI", "PCI", true, 5),
+                CellComponent("Timing Advance", "Timing Advance", true, 6),
+                CellComponent("Cell ID", "Cell ID", true, 7),
+                CellComponent("EARFCN (Downlink)", "EARFCN (Downlink)", true, 8),
                 CellComponent("Bandwidth", "Bandwidth", true, 9),
                 CellComponent("TAC", "TAC", true, 10),
                 CellComponent("MCC", "MCC", true, 11),
@@ -1175,7 +1198,9 @@ class MainActivity : ComponentActivity() {
                             val reader = inputStream.bufferedReader()
                             reader.readLine()
                             cellDatabase.cellDao().clearAll() // Clear existing data
-                            reader.forEachLine { line ->
+                            var invalidCsv = false
+
+                            for (line in reader.lineSequence()) {
                                 val values = line.split(",")
                                 Log.d("values.size", values.size.toString())
                                 if (values.size == 19) {
@@ -1226,8 +1251,16 @@ class MainActivity : ComponentActivity() {
                                     cellDatabase.cellDao().insert(cell)
                                     Log.d("Restore", "Restored Cell: $cell")
                                 } else {
+                                    invalidCsv = true
+                                    break
+                                }
+                            }
+
+                            if (invalidCsv) {
+                                runOnUiThread {
                                     Toast.makeText(applicationContext, "Error restoring database: Invalid/old database csv", Toast.LENGTH_LONG).show()
                                 }
+                                return@launch
                             }
                         }
                         withContext(Dispatchers.Main) {
@@ -1554,7 +1587,11 @@ fun CellInfoItem(
     var showDialog by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val cellInfoRows = when (cellInfo) {
-        is CellInfoNr -> formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents)
+        is CellInfoNr -> {
+            val nciValue = (cellInfo.cellIdentity as? CellIdentityNr)?.nci ?: CellInfo.UNAVAILABLE_LONG
+            val mode = if (nciValue == 268435455L) "NSA" else "SA"
+            listOf("Mode" to mode) + formatCellInfoNr(cellInfo, if (isExpanded) nrComponents else nrCompressedComponents)
+        }
         is CellInfoLte -> formatCellInfoLte(
             cellInfo,
             if (isExpanded) lteComponents else lteCompressedComponents,
@@ -1658,10 +1695,14 @@ fun getExplanation(label: String): String {
         "RSRQ" -> "Reference Signal Received Quality is a measure of signal quality and is the ratio of the RSRP over the RSSI."
         "RSSNR" -> "Reference Signal Signal-to-Noise Ratio is the ratio of signal over background noise."
         "CQI" -> "Channel Quality Indicator is the metric reported to the network from a mobile device that indicated the downlink channel quality."
+        "ssRSRQ" -> "Synchronization Signal Reference Signal Received Quality is the 5G equivalent of LTE RSRQ."
+        "ssSINR" -> "Synchronization Signal Signal-to-Interference-plus-Noise Ratio is the 5G equivalent of LTE SINR."
         "Timing Advance" -> "Timing Advance is a parameter that represents the amount of time by which a mobile device must advance its signal transmission to ensure it reaches the base station in the correct time slot. The TA is calculated by determining the round trip time of the signal."
         "DbM" -> "Decibel milliwatts that is used for measuring the power of signals."
         "Data" -> "Raw data given from the phone."
         "ssRSRP" -> "Synchronization Signal Reference Signal Received Power is the power of the synchronization reference signal broadcasted in a cell. The 5G equivalent of LTE RSRP."
+        "NCI" -> "The NR Cell Identity is a 36-bit identifier for a 5G NR cell. It is composed of the gNodeB identifier and the NR Cell Sector ID."
+        "gNB" -> "The gNodeB identifier derived from the upper NR Cell Identity bits. This is analogous to the base station ID for NR cells."
         // Add more explanations for other labels
         else -> "No information available."
     }
@@ -1669,16 +1710,40 @@ fun getExplanation(label: String): String {
 
 fun formatCellInfoNr(cellInfoNr: CellInfoNr, components: List<CellComponent>): List<Pair<String, String>> {
     val cellIdentity = cellInfoNr.cellIdentity as CellIdentityNr
-    val cellSignalStrength = cellInfoNr.cellSignalStrength
+    val cellSignalStrength = cellInfoNr.cellSignalStrength as? CellSignalStrengthNr
 
     val band = getNrBandFromArfcn(cellIdentity.nrarfcn)
 
+    val nciValue = cellIdentity.getNci()
+    val nrGnbBits = getNrGnbBitLength(cellIdentity.mccString, cellIdentity.mncString)
+    val nciDisplay = if (nciValue == 268435455L) "n/a" else nciValue.toString()
+    val gnbDisplay = if (nciValue == 268435455L) "n/a" else calculateNrGnbId(nciValue, nrGnbBits)
+    val ssRsrqDisplay = if (cellSignalStrength == null || cellSignalStrength.ssRsrq == Int.MAX_VALUE || cellSignalStrength.ssRsrq == Int.MIN_VALUE) {
+        "n/a"
+    } else {
+        "${cellSignalStrength.ssRsrq} dB"
+    }
+    val ssSinrDisplay = if (cellSignalStrength == null || cellSignalStrength.ssSinr == Int.MAX_VALUE || cellSignalStrength.ssSinr == Int.MIN_VALUE) {
+        "n/a"
+    } else {
+        "${cellSignalStrength.ssSinr} dB"
+    }
+
     val allComponents = listOf(
-        "ssRSRP" to (cellSignalStrength.dbm.toString() + " dBm"),
+        "gNB" to gnbDisplay,
+        "ssRSRP" to (cellSignalStrength?.dbm?.toString() ?: cellInfoNr.cellSignalStrength.dbm.toString()) + " dBm",
+        "ssRSRQ" to ssRsrqDisplay,
+        "ssSINR" to ssSinrDisplay,
         "ARFCN" to cellIdentity.nrarfcn.toString(),
         "Band Number" to "n$band",
         "PCI" to cellIdentity.pci.toString(),
-        "Data" to (cellSignalStrength.toString() + cellIdentity.toString())
+        "Cell Sector ID" to (if (nciValue == 268435455L || nciValue < 0L) "n/a" else calculateNrSectorId(nciValue, nrGnbBits)),
+        "NCI" to nciDisplay,
+        "MCC" to (cellIdentity.mccString ?: ""),
+        "MNC" to (cellIdentity.mncString ?: ""),
+        "Operator" to (cellIdentity.operatorAlphaLong?.toString() ?: ""),
+        "Operator Abbreviation" to (cellIdentity.operatorAlphaShort?.toString() ?: ""),
+        "Data" to (cellSignalStrength?.toString() ?: cellInfoNr.cellSignalStrength.toString()) + cellIdentity.toString()
     )
 
     return components
@@ -1798,11 +1863,13 @@ fun formatCellInfoLte(
     val band = getLTEBandFromEArfcn(cellIdentity.earfcn)
     val bandwidth = formatBandwidth(cellIdentity.bandwidth)
 
+    val rsrpDisplay = if (cellSignalStrength.rsrp == -44) "n/a" else (cellSignalStrength.rsrp.toString() + " dBm")
+
     val allComponents = listOf(
         "eNB ID" to eNodeBId,
         "Cell Sector ID" to cellSectorId,
         "Band Number" to band.toString(),
-        "RSRP" to (cellSignalStrength.rsrp.toString() + " dBm"),
+        "RSRP" to rsrpDisplay,
         "RSRQ" to (cellSignalStrength.rsrq.toString() + " dB"),
         "Timing Advance" to timingAdvance,
         "Cell ID" to cellid,
@@ -1963,4 +2030,37 @@ fun calculateENBId(eci: String): String {
         val eNodeBId = (eci.toInt() / 256).toString()
         return eNodeBId
     }
+}
+
+private fun getNrGnbBitLength(mcc: String?, mnc: String?): Int {
+    val normalizedMcc = mcc?.trim().orEmpty()
+    val normalizedMnc = mnc?.trim().orEmpty()
+
+    return when {
+        normalizedMcc == "311" && normalizedMnc in setOf("480", "481", "486", "487", "488", "489", "490", "491", "492", "493", "494", "495", "497", "498", "499") -> 22
+        normalizedMcc == "310" && normalizedMnc in setOf("260", "260") || normalizedMcc == "311" && normalizedMnc == "660" || normalizedMcc == "312" && normalizedMnc == "790" || normalizedMcc == "313" && normalizedMnc == "100" || normalizedMcc == "314" && normalizedMnc == "020" -> 24
+        normalizedMcc == "310" && normalizedMnc == "410" || normalizedMcc == "311" && normalizedMnc in setOf("180", "190") || normalizedMcc == "312" && normalizedMnc == "530" || normalizedMcc == "314" && normalizedMnc == "030" -> 26
+        else -> 22
+    }
+}
+
+fun calculateNrGnbId(nci: Long, gnbBits: Int): String {
+    if (nci < 0L || nci == 268435455L) {
+        return "n/a"
+    }
+
+    val sectorBits = 36 - gnbBits
+    val gnbId = nci shr sectorBits
+    return gnbId.toString()
+}
+
+fun calculateNrSectorId(nci: Long, gnbBits: Int): String {
+    if (nci < 0L || nci == 268435455L) {
+        return "n/a"
+    }
+
+    val sectorBits = 36 - gnbBits
+    val sectorMask = (1L shl sectorBits) - 1
+    val sectorId = nci and sectorMask
+    return sectorId.toString()
 }

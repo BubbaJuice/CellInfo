@@ -7,4 +7,4 @@ There are scripts currently for merging cell logs (perhaps from different phones
 ## CellMapper Convert
 To convert multiple files, use `cmd /r dir /s /b | clip` to get all file paths in a folder copied to your clipboard.
 
-Still working on consistency between these two scripts and the app notably doesn't support multiple bands with same cellid in CellMapper like I have made these scripts to produce if is the case. (Recording behavior within the app still only records 1 band per cell)
+Still working on consistency between these two scripts and the app notably doesn't support multiple bands with same cellid in CellMapper like I have made these scripts to produce if is the case. (Recording behavior within the app still only records 1 band per cell when bands like 4 and 66 can broadcast from the same cell)
